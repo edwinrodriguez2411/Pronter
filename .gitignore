@@ -1,0 +1,14 @@
+node_modules/
+dist/
+dist-server/
+.env
+.env.*
+!.env.example
+playwright-report/
+test-results/
+public/vendor/
+.cache/
+tests/fixtures/example.heic
+tests/fixtures/sample.ppt
+tests/fixtures/embedded.pptx
+tests/fixtures/animated.pptx
