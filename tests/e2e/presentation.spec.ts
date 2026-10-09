@@ -4,7 +4,7 @@ import { readFileSync, existsSync } from 'node:fs';
 
 async function associate(host: Page, phone: Page, phoneOrigin = '') {
   await host.goto('/');
-  await expect(host.locator('.qr-paper svg')).toBeVisible();
+  await expect(host.locator('.qr-paper > svg')).toBeVisible();
   await expect(host.locator('.scan-station')).toHaveCSS('opacity', '1');
   // Resolve the QR token from a real host socket using the SVG encoder's rendered value isn't available.
   // Read its module-owned connection via a browser-independent QR decoder in the test below.
@@ -52,6 +52,7 @@ async function networkInterruption(page: Page) {
 
 async function drawOnPhone(phone: Page, touch = false) {
   const pad = phone.locator('.marker-pad'); await pad.scrollIntoViewIfNeeded();
+  await expect(pad).toHaveAttribute('aria-disabled', 'false');
   const rect = (await pad.boundingBox())!;
   if (touch) {
     const scroll = await phone.evaluate(() => scrollY);
@@ -148,20 +149,33 @@ test('phone and PC drawing follows zoom, pan, resize, reconnect, replacement and
   await host.screenshot({ path: '.cache/marker-desktop.png' });
   await phone.getByRole('button', { name: 'Salir', exact: true }).click();
   await expect(host.getByText('Sesión terminada.', { exact: true })).toBeVisible(); await expect(overlay).toHaveCount(0);
-  await expect(host.locator('.qr-paper svg')).toBeVisible();
+  await expect(host.locator('.qr-paper > svg')).toBeVisible();
   expect(errors).toEqual([]); await host.close(); await phone.close();
 });
 
 test('drawing belongs to each PDF/PPTX page and follows Markdown scrolling and video letterboxing', async ({ browser }) => {
   const host = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const phone = await browser.newPage({ viewport: { width: 320, height: 812 } });
+  // Delay control state and acknowledgements to expose stale-page actions on the internet.
+  await phone.routeWebSocket('**/socket.io/**', (socket) => {
+    const server = socket.connectToServer();
+    const timers = new Set<ReturnType<typeof setTimeout>>();
+    socket.onClose(() => { for (const timer of timers) clearTimeout(timer); timers.clear(); });
+    server.onMessage((message) => {
+      if (typeof message !== 'string' || !message.includes('/control,')) { socket.send(message); return; }
+      const timer = setTimeout(() => { timers.delete(timer); socket.send(message); }, 250);
+      timers.add(timer);
+    });
+  });
   const errors: string[] = []; host.on('pageerror', (error) => errors.push(error.message)); phone.on('pageerror', (error) => errors.push(error.message));
   await associate(host, phone); await upload(phone, 'paginas.pdf', 'application/pdf', pdfFixture());
   await phone.getByRole('button', { name: 'Marcador', exact: true }).click(); await drawOnPhone(phone);
   const overlay = host.locator('.annotation-canvas'); await expect(overlay).toHaveAttribute('data-strokes', '1');
   await expect.poll(() => inkPixel(host, '.content-pdf canvas', 0.4, 0.35)).toEqual([227, 66, 52, 255]);
   expect(await phone.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await phone.getByRole('button', { name: 'Página siguiente' }).click(); await expect(overlay).toHaveAttribute('data-strokes', '0');
+  await phone.getByRole('button', { name: 'Página siguiente' }).click();
+  await expect(phone.locator('.marker-pad')).toHaveAttribute('aria-disabled', 'true');
+  await expect(overlay).toHaveAttribute('data-strokes', '0');
   await phone.getByRole('button', { name: 'Color azul' }).click(); await drawOnPhone(phone); await expect(overlay).toHaveAttribute('data-strokes', '1');
   await phone.getByRole('button', { name: 'Página anterior' }).click();
   await expect.poll(() => inkPixel(host, '.content-pdf canvas', 0.4, 0.35)).toEqual([227, 66, 52, 255]);
@@ -218,7 +232,7 @@ test('real QR, exclusive controller, image, pointer, replacement, failure preser
   const download = host.waitForEvent('download', { timeout: 500 }).then(() => true, () => false);
   await phone.getByRole('button', { name: 'Salir', exact: true }).click();
   await expect(host.getByText('Sesión terminada.', { exact: true })).toBeVisible();
-  await expect(host.locator('.qr-paper svg')).toBeVisible();
+  await expect(host.locator('.qr-paper > svg')).toBeVisible();
   expect(await download).toBe(false);
   await other.reload(); await expect(other.getByText(/Este QR ya se usó o caducó/)).toBeVisible();
   expect(errors).toEqual([]);
@@ -326,7 +340,7 @@ test('PDF pages, PPTX slides, Markdown GFM and audio controls in one SPA', async
 
 test('landing and controller do not overflow small viewports and respect reduced motion', async ({ browser }) => {
   const page = await browser.newPage({ viewport: { width: 375, height: 812 }, reducedMotion: 'reduce' });
-  await page.goto('/'); await expect(page.locator('.qr-paper svg')).toBeVisible();
+  await page.goto('/'); await expect(page.locator('.qr-paper > svg')).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   expect(await page.locator('.scan-station').evaluate((element) => getComputedStyle(element).animationName)).toBe('none');
   await page.close();
