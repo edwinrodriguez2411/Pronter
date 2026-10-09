@@ -1,6 +1,6 @@
 import { io, type Socket } from 'socket.io-client';
 import { useEffect, useState } from 'react';
-import { ACK_TIMEOUT_MS, emptyViewer, type ConnectionStatus, type Credentials, type PairPresence, type PairResponse, type Reply, type Role, type ViewerState } from '../shared/protocol';
+import { ACK_TIMEOUT_MS, emptyDisplay, emptyViewer, type ConnectionStatus, type Credentials, type DisplayState, type PairPresence, type PairResponse, type PreviewView, type Reply, type Role, type ViewerState } from '../shared/protocol';
 
 export class RequestError extends Error {
   constructor(message: string, readonly code?: string) { super(message); }
@@ -22,13 +22,15 @@ export interface ConnectionSnapshot {
   status: ConnectionStatus; token: string; error: string; publicUrl: string;
   viewer: ViewerState; dataReady: boolean; reconnectAt: number | null; graceMs: number;
   selectingFile: boolean; reconnectUntil: number | null;
+  display: DisplayState; previewView: PreviewView | null;
 }
 type Listener = (...args: any[]) => void;
 export class Connection {
   readonly control: Socket;
   data?: Socket;
   credentials?: Credentials;
-  snapshot: ConnectionSnapshot = { status: 'connecting', token: '', error: '', publicUrl: '', viewer: emptyViewer(), dataReady: false, reconnectAt: null, graceMs: 20000, selectingFile: false, reconnectUntil: null };
+  snapshot: ConnectionSnapshot = { status: 'connecting', token: '', error: '', publicUrl: '', viewer: emptyViewer(), dataReady: false, reconnectAt: null, graceMs: 20000, selectingFile: false, reconnectUntil: null, display: emptyDisplay(), previewView: null };
+  private previewWatching = false;
   private subscribers = new Set<() => void>();
   private dataListeners = new Map<string, Set<Listener>>();
   private scannedToken: string;
@@ -62,6 +64,8 @@ export class Connection {
     this.control.on('pair:presence', (presence: PairPresence) => this.patch(presence));
     this.control.on('transfer:availability', (ready: boolean) => { this.peerReady = ready; this.refreshDataReady(); });
     this.control.on('viewer:state', (viewer: ViewerState) => this.patch({ viewer }));
+    this.control.on('display:state', (display: DisplayState) => this.patch({ display }));
+    this.control.on('preview:view', (previewView: PreviewView) => this.patch({ previewView }));
     this.control.on('pair:ended', (reason: string) => this.finish(reason));
     document.addEventListener('visibilitychange', this.wake);
     window.addEventListener('pageshow', this.wake);
@@ -101,6 +105,8 @@ export class Connection {
       if (this.role === 'controller') { this.scannedToken = ''; window.history.replaceState(null, '', '/control'); }
       this.patch({ token: pair.token ?? this.snapshot.token, status: pair.connected ? 'connected' : this.hasPartner ? 'reconnecting' : 'waiting', error: '', reconnectAt: null });
       if (this.role === 'controller') this.control.emit('pair:picker', this.selectingFile);
+      if (this.role === 'controller') this.control.emit('preview:watch', this.previewWatching);
+      else this.control.emit('display:state', this.snapshot.display);
       this.openData();
     } catch (error) {
       if (this.disposed || !this.control.connected || this.control.id !== socketId) return;
@@ -188,11 +194,14 @@ export class Connection {
     this.patch({ viewer });
     if (this.control.connected && this.credentials) this.control.emit('viewer:state', viewer);
   }
+  watchPreview(watch: boolean) { this.previewWatching = watch; if (this.control.connected) this.control.emit('preview:watch', watch); }
+  publishDisplay(display: DisplayState) { this.patch({ display }); if (this.role === 'host' && this.control.connected) this.control.emit('display:state', display); }
   finish(reason = 'Sesión terminada') {
     if (this.snapshot.status === 'ended') return;
     this.credentials = undefined;
     clearTimeout(this.associationRetry); clearTimeout(this.dataRetry);
-    this.patch({ status: 'ended', token: '', error: reason, dataReady: false, viewer: emptyViewer() });
+    this.previewWatching = false;
+    this.patch({ status: 'ended', token: '', error: reason, dataReady: false, viewer: emptyViewer(), display: emptyDisplay(), previewView: null });
     this.data?.disconnect();
     this.control.disconnect();
   }

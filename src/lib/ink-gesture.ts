@@ -41,11 +41,11 @@ export class InkGesture {
       }).finally(() => { this.completed(gesture); this.inFlight--; this.pump(); });
     }
   }
-  begin(assetId: string, page: number, color: InkColor, width: InkWidth, point: InkPoint) {
+  begin(assetId: string, page: number, color: InkColor, width: InkWidth, point: InkPoint, viewId?: string) {
     this.end();
     const gesture: Gesture = { assetId, page, strokeId: createId(), sequence: 0, pending: [], failed: false, total: 1, queued: 0, closed: false, started: false };
     this.active = gesture; this.pending.add(gesture);
-    this.enqueue(gesture, { id: createId(), assetId, page, type: 'begin', strokeId: gesture.strokeId, color, width, point });
+    this.enqueue(gesture, { id: createId(), assetId, page, type: 'begin', strokeId: gesture.strokeId, color, width, point, ...(viewId ? { viewId } : {}) });
   }
   move(point: InkPoint) {
     const gesture = this.active;

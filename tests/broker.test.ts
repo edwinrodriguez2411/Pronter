@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createServer } from 'node:http';
 import { io, type Socket } from 'socket.io-client';
 import { createBroker } from '../server/broker';
-import { CHUNK_BYTES, MAX_FILE_BYTES, emptyViewer, type Credentials, type Reply } from '../shared/protocol';
+import { CHUNK_BYTES, MAX_FILE_BYTES, MAX_PREVIEW_BYTES, emptyViewer, type Credentials, type Reply } from '../shared/protocol';
 
 let broker: ReturnType<typeof createBroker>;
 let url: string;
@@ -32,6 +32,32 @@ beforeEach(async () => {
 afterEach(async () => { for (const client of sockets) client.disconnect(); await broker.close(); });
 
 describe('volatile pairing broker', () => {
+  it('permits only the admitted phone to control the host display before a file is loaded', async () => {
+    const { host, controller } = await pair();
+    host.on('display:command', (value, ack) => { expect(value).toBe(true); ack({ ok: true }); });
+    expect((await call(controller, 'display:command', true)).ok).toBe(true);
+    const other = await socket('control');
+    expect((await call(other, 'display:command', true)).code).toBe('OFFLINE');
+    expect((await call(controller, 'display:command', 'yes')).code).toBe('OFFLINE');
+    const received = event(controller, 'display:state');
+    host.emit('display:state', { expanded: true, native: false, needsClick: true });
+    expect(await received).toEqual({ expanded: true, native: false, needsClick: true });
+  });
+  it('bounds and authenticates reverse preview frames without storing images on the broker', async () => {
+    const { host, controller, hostInfo, controllerInfo } = await pair();
+    const received = event(controller, 'viewer:state'); host.emit('viewer:state', { ...emptyViewer(), assetId: 'asset' }); await received;
+    const hostData = await socket('transfer', hostInfo), phoneData = await socket('transfer', controllerInfo);
+    const meta = { assetId: 'asset', page: 1, zoom: 1, viewId: 'view', sequence: 1, width: 800, height: 450 };
+    const bytes = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+    let frames = 0;
+    phoneData.on('preview:frame', (view, image, ack) => { frames++; expect(view).toEqual(meta); expect(image).toEqual(bytes); ack({ ok: true }); });
+    expect((await call(phoneData, 'preview:frame', meta, bytes)).code).toBe('OFFLINE');
+    expect((await call(hostData, 'preview:frame', { ...meta, assetId: 'old' }, bytes)).code).toBe('INVALID_PREVIEW');
+    expect((await call(hostData, 'preview:frame', meta, Buffer.alloc(MAX_PREVIEW_BYTES + 1))).code).toBe('INVALID_PREVIEW');
+    expect((await call(hostData, 'preview:frame', meta, bytes)).ok).toBe(true);
+    expect((await call(hostData, 'preview:frame', meta, bytes)).code).toBe('PREVIEW_BUSY');
+    expect(frames).toBe(1);
+  });
   it('relays drawing only from the admitted phone and only for the visible asset and page', async () => {
     const { host, controller, hostInfo } = await pair();
     const viewer = { ...emptyViewer(), assetId: 'asset', kind: 'pdf' as const, pages: 2, capabilities: ['draw' as const] };

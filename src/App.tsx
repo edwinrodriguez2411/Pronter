@@ -3,7 +3,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, AudioLines, Check, CheckCheck, ChevronLeft, ChevronRight, CircleX, Expand, FileImage, FileSliders, FileText, Image, LoaderCircle, Maximize, Minimize, Minus, MousePointer2, Pause, PenLine, Play, Plus, ScanLine, Send, ShieldCheck, Smartphone, Square, Timer, Upload, Video, Volume2, VolumeX, X, ZoomIn } from 'lucide-react';
 import { useConnection, request, type ConnectionSnapshot } from './connection';
 import { Presenter } from './presenter';
-import { ACK_TIMEOUT_MS, CHUNK_BYTES, FILE_ACCEPT, MAX_FILE_BYTES, TRANSFER_WINDOW, formatBytes, formatTime, kindFromName, type Command, type CommandType, type FileMeta, type InkColor, type InkCommand, type InkWidth, type PointerPosition, type ViewerState } from '../shared/protocol';
+import { ACK_TIMEOUT_MS, CHUNK_BYTES, FILE_ACCEPT, MAX_FILE_BYTES, TRANSFER_WINDOW, formatBytes, formatTime, kindFromName, type Ack, type Command, type CommandType, type FileMeta, type InkColor, type InkCommand, type InkWidth, type PointerPosition, type ViewerState } from '../shared/protocol';
 import type { Connection } from './connection';
 import { createId } from './lib/id';
 import { MarkerPad, MarkerTools } from './components/MarkerTools';
@@ -81,6 +81,8 @@ function HostPage() {
   const presenter = useRef<Presenter | undefined>(undefined);
   const [error, setError] = useState('');
   const [isFullscreen, setFullscreen] = useState(!!document.fullscreenElement);
+  const [expanded, setExpanded] = useState(false);
+  const [needsClick, setNeedsClick] = useState(false);
   const [drawing, setDrawing] = useState(false);
   const [inkColor, setInkColor] = useState<InkColor>('coral');
   const [inkWidth, setInkWidth] = useState<InkWidth>(0.006);
@@ -91,10 +93,32 @@ function HostPage() {
     return () => { presenter.current?.destroy(); presenter.current = undefined; };
   }, [connection]);
   useEffect(() => {
-    const changed = () => setFullscreen(!!document.fullscreenElement);
+    const changed = () => {
+      const native = !!document.fullscreenElement; setFullscreen(native); setNeedsClick(false);
+      if (!native) setExpanded(false);
+    };
     document.addEventListener('fullscreenchange', changed);
     return () => document.removeEventListener('fullscreenchange', changed);
   }, []);
+  useEffect(() => { connection.publishDisplay({ expanded, native: isFullscreen, needsClick }); }, [connection, expanded, isFullscreen, needsClick, snapshot.status]);
+  useEffect(() => {
+    const remoteDisplay = async (value: boolean, ack: Ack) => {
+      setExpanded(value); setNeedsClick(false);
+      let native = !!document.fullscreenElement, requiresClick = false;
+      try {
+        if (value && !native && document.documentElement.requestFullscreen) { await document.documentElement.requestFullscreen(); native = true; }
+        if (!value && native) { await document.exitFullscreen(); native = false; }
+      } catch { requiresClick = value; }
+      if (value && !native) requiresClick = true;
+      setNeedsClick(requiresClick);
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      presenter.current?.refreshPreview();
+      connection.publishDisplay({ expanded: value, native, needsClick: requiresClick });
+      ack({ ok: true });
+    };
+    connection.control.on('display:command', remoteDisplay);
+    return () => { connection.control.off('display:command', remoteDisplay); };
+  }, [connection]);
   useEffect(() => { presenter.current?.setDrawing(drawing && !!state.assetId, inkColor, inkWidth); }, [drawing, inkColor, inkWidth, state.assetId]);
   useEffect(() => {
     if (snapshot.status !== 'ended') return;
@@ -115,6 +139,7 @@ function HostPage() {
     const keyboard = (event: KeyboardEvent) => {
       if ((event.target as Element).closest('input,textarea,select,[contenteditable]') || event.ctrlKey || event.metaKey || event.altKey) return;
       if (event.key.toLowerCase() === 'f') { event.preventDefault(); if (!event.repeat) void fullscreen().catch((reason: Error) => setError(reason.message)); return; }
+      if (event.key === 'Escape' && !document.fullscreenElement) { setExpanded(false); setNeedsClick(false); }
       if ((event.target as Element).closest('button,a') || !connection.snapshot.viewer.assetId) return;
       const viewer = connection.snapshot.viewer;
       if (['ArrowRight', 'PageDown'].includes(event.key)) { event.preventDefault(); command(viewer.capabilities.includes('scroll') ? 'scroll' : 'next', viewer.capabilities.includes('scroll') ? 1 : undefined); }
@@ -127,9 +152,14 @@ function HostPage() {
   }, [connection]);
   const landing = ['connecting', 'waiting', 'error'].includes(snapshot.status) && !state.assetId;
   if (snapshot.status === 'ended') return <div className="end-screen"><Brand /><div className="end-symbol"><CheckCheck size={56} /></div><h1>Sesión terminada.</h1><p>Un nuevo QR, un nuevo comienzo.</p><LoaderCircle className="spin" size={22} /></div>;
-  return <div className={`host-app ${landing ? 'is-landing' : 'is-presenting'} ${isFullscreen ? 'is-fullscreen' : ''}`}>
+  return <div className={`host-app ${landing ? 'is-landing' : 'is-presenting'} ${isFullscreen ? 'is-fullscreen' : ''} ${expanded ? 'is-expanded' : ''}`}>
     <header className="app-header"><Brand /><div className="header-right"><Status snapshot={snapshot} /><Button className="fullscreen-button" aria-label={isFullscreen ? 'Salir de pantalla completa' : 'Pantalla completa'} aria-pressed={isFullscreen} title={isFullscreen ? 'Salir de pantalla completa (F o Esc)' : 'Pantalla completa (F)'} onClick={() => { void fullscreen().catch((reason: Error) => setError(reason.message)); }}>{isFullscreen ? <Minimize size={19} aria-hidden="true" /> : <Maximize size={19} aria-hidden="true" />}<span>{isFullscreen ? 'Salir de pantalla completa' : 'Pantalla completa'}</span></Button></div></header>
     {landing && <Landing snapshot={snapshot} />}
+    {expanded && <div className="expanded-actions">
+      {state.needsActivation && <Button onClick={() => { void presenter.current?.activate().catch((reason: Error) => setError(reason.message)); }}><Volume2 size={18} />Activar audio</Button>}
+      {needsClick && <div className="fullscreen-permission" role="status"><span>El navegador necesita un clic aquí para ocultar también sus barras.</span><Button onClick={() => { void fullscreen().catch((reason: Error) => setError(reason.message)); }}><Maximize size={18} />Activar pantalla completa</Button></div>}
+      <IconButton label="Salir de vista ampliada" onClick={() => { setExpanded(false); setNeedsClick(false); if (document.fullscreenElement) void document.exitFullscreen(); }}><Minimize size={19} /></IconButton>
+    </div>}
     <main className={`stage-shell ${landing ? 'is-hidden' : ''}`} aria-label="Pantalla de presentación">
       <div className="stage-topline"><span>{state.name || 'Tu pantalla está lista'}</span><span>{state.capabilities.includes('pages') ? `${state.page} / ${state.pages}` : state.kind === 'video' || state.kind === 'audio' ? formatTime(state.currentTime) : ''}</span></div>
       {state.capabilities.includes('draw') && <div className="host-marker-bar"><Button className={`marker-toggle ${drawing ? 'is-active' : ''}`} aria-pressed={drawing} disabled={state.black || state.phase !== 'idle'} onClick={() => setDrawing(!drawing)}><PenLine size={18} aria-hidden="true" />Dibujar en el PC</Button>{drawing ? <MarkerTools color={inkColor} width={inkWidth} onColor={setInkColor} onWidth={setInkWidth} onUndo={() => editInk('undo')} onClear={() => editInk('clear')} disabled={state.black || state.phase !== 'idle'} count={state.inkCount} /> : <span className="marker-bar-hint">También puedes dibujar desde el celular.</span>}</div>}
@@ -271,6 +301,7 @@ function ControlPage() {
   const [inkColor, setInkColor] = useState<InkColor>('coral');
   const [inkWidth, setInkWidth] = useState<InkWidth>(0.006);
   const [viewPending, setViewPending] = useState(false);
+  const [displayPending, setDisplayPending] = useState(false);
   const viewPendingRef = useRef(false);
   const wakeLock = useRef<WakeLockSentinel | undefined>(undefined);
   const state = snapshot.viewer;
@@ -319,6 +350,11 @@ function ControlPage() {
     cancel(); setRunning(false);
     void request(connection.control, 'pair:end').then(() => connection.finish(), (reason: Error) => setError(reason.message));
   };
+  const remoteFullscreen = () => {
+    setDisplayPending(true); setError('');
+    void request(connection.control, 'display:command', !(snapshot.display.expanded || snapshot.display.native))
+      .catch((reason: Error) => setError(reason.message)).finally(() => setDisplayPending(false));
+  };
   if (snapshot.status === 'ended') return <div className="end-screen mobile-end"><Brand /><div className="end-symbol"><CheckCheck size={52} /></div><h1>Todo listo.<br />Todo cerrado.</h1><p>La presentación terminó.<br />Escanea un nuevo QR para volver a conectar.</p><span className="privacy-line"><ShieldCheck size={16} />No conservamos tus archivos.</span></div>;
   if (snapshot.status === 'error') return <div className="end-screen mobile-end"><Brand /><div className="end-symbol error-symbol"><Smartphone size={52} /></div><h1>No pudimos<br />conectarte.</h1><p role="alert">{snapshot.error}</p><Button className="primary" onClick={() => connection.retry()}><ScanLine size={18} />Volver a intentar</Button><p className="muted">Solo el primer celular que escanea<br />puede tomar el mando.</p></div>;
   return <div className="controller-app">
@@ -329,6 +365,8 @@ function ControlPage() {
       <Button className="upload-button" disabled={!canSend} onClick={() => { connection.setFileSelection(true); picker.current?.click(); }}><span className="upload-icon"><Upload size={25} /></span><span><strong>{state.assetId ? 'Enviar otro archivo' : 'Enviar un archivo'}</strong><small>Hasta 1 GB · se muestra en tu pantalla</small></span><Plus size={23} /></Button>
       {upload && (upload.sending || state.phase !== 'idle') && <div className="upload-progress" role="status"><div><strong>{upload.name}</strong><IconButton label="Cancelar envío" onClick={cancel}><X size={18} /></IconButton></div><div className="progress-track"><i style={{ transform: `scaleX(${upload.sending ? upload.progress : state.progress})` }} /></div><span>{upload.waiting ? 'Recuperando conexión para enviar…' : upload.sending ? `Enviando · ${Math.round(upload.progress * 100)}%` : state.phase === 'converting' ? `Convirtiendo en la pantalla · ${Math.round(state.progress * 100)}%` : 'Preparando en la pantalla…'}</span></div>}
       {(error || uploadError) && <div className="controller-error" role="alert"><CircleX size={19} /><span>{error || uploadError}</span><IconButton label="Cerrar aviso" onClick={() => { setError(''); setUploadError(''); }}><X size={16} /></IconButton></div>}
+      <Button className="remote-fullscreen" disabled={!connected || displayPending || viewPending} aria-pressed={snapshot.display.expanded || snapshot.display.native} onClick={remoteFullscreen}>{snapshot.display.expanded || snapshot.display.native ? <Minimize size={19} /> : <Maximize size={19} />}<span>{snapshot.display.expanded || snapshot.display.native ? 'Salir de pantalla completa del PC' : 'Pantalla completa del PC'}</span></Button>
+      {snapshot.display.needsClick && <p className="fullscreen-help" role="status">La presentación ya ocupa la ventana del PC. Para ocultar las barras del navegador, toca «Activar pantalla completa» una vez en el computador.</p>}
       {state.assetId ? <>
         <div className="current-file"><span className="current-file-icon">{state.kind === 'audio' ? <AudioLines /> : state.kind === 'video' ? <Video /> : state.kind === 'image' ? <Image /> : <FileText />}</span><div><span>Ahora en pantalla</span><strong>{state.name}</strong></div><Check size={20} className="file-check" /></div>
         <div className="controls-panel" aria-busy={viewPending}>
@@ -348,7 +386,7 @@ function ControlPage() {
           </div>
           {guideMode === 'laser' ? <LaserPad connection={connection} assetId={state.assetId} enabled={controlsReady && !state.black} /> : <>
             <MarkerTools color={inkColor} width={inkWidth} onColor={setInkColor} onWidth={setInkWidth} onUndo={() => editInk('undo')} onClear={() => editInk('clear')} disabled={!controlsReady || state.black || state.phase !== 'idle'} count={state.inkCount} />
-            <MarkerPad connection={connection} assetId={state.assetId} page={state.page} zoom={state.zoom} enabled={controlsReady && !state.black && state.phase === 'idle'} color={inkColor} width={inkWidth} count={state.inkCount} onError={setError} />
+            <MarkerPad connection={connection} assetId={state.assetId} page={state.page} zoom={state.zoom} enabled={controlsReady && !state.black && state.phase === 'idle'} color={inkColor} width={inkWidth} count={state.inkCount} view={snapshot.previewView} onError={setError} />
           </>}
         </section>}
         <Button className={`black-button ${state.black ? 'is-active' : ''}`} disabled={!controlsReady} onClick={() => command('black', !state.black)}><Square size={18} fill="currentColor" />{state.black ? 'Mostrar presentación' : 'Pantalla negra'}<span>{state.black ? 'Activada' : 'Pausa visual'}</span></Button>

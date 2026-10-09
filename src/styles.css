@@ -106,6 +106,14 @@
   .scan-station { animation-delay: 100ms; }
 
   .host-app.is-presenting { height: 100dvh; display: flex; flex-direction: column; background: #f5f6fc; overflow: hidden; }
+  .is-expanded .app-header, .is-expanded .stage-topline, .is-expanded .host-marker-bar, .is-expanded .stage-toolbar { display: none; }
+  .is-expanded .stage-shell { padding: 0; }
+  .is-expanded .stage-area { border: 0; border-radius: 0; }
+  .expanded-actions { position: fixed; z-index: 30; right: 12px; bottom: 12px; display: flex; align-items: flex-end; gap: 8px; }
+  .expanded-actions > .button { background: #ffffffd9; }
+  .fullscreen-permission { background: white; padding: 12px; border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 4px 20px #18234b12; max-width: 360px; font-size: 12px; }
+  .fullscreen-permission > span { display: block; line-height: 1.5; margin-bottom: 8px; }
+  .fullscreen-permission .button { background: var(--blue); color: white; width: 100%; }
   .is-presenting .app-header { height: 76px; width: 100%; padding-inline: 32px; flex-shrink: 0; }
   .is-presenting .brand { font-size: 29px; }
   .is-presenting .brand svg { width: 31px; height: 31px; }
@@ -281,8 +289,11 @@
   .marker-actions { display: flex; gap: 8px; }
   .marker-actions .button { min-height: 48px; font-size: 12px; border: 1px solid var(--line); }
   .marker-section { margin-top: 16px; }
+  .remote-fullscreen { width: 100%; min-height: 48px; border: 1px solid var(--line); margin-top: 16px; background: white; color: var(--blue); font-size: 12px; }
+  .fullscreen-help { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 10px 2px; }
   .marker-section.is-disabled { opacity: .5; }
-  .marker-pad { position: relative; height: 190px; border-radius: 18px; border: 1px solid #a7afcd; overflow: hidden; touch-action: none; cursor: crosshair; user-select: none; background-color: #eef0ff; background-image: radial-gradient(#b8c2e4 .8px, transparent .8px); background-size: 14px 14px; }
+  .marker-pad { position: relative; width: 100%; border-radius: 12px; border: 1px solid #a7afcd; overflow: hidden; touch-action: none; cursor: crosshair; user-select: none; background: white; }
+  .marker-preview { display: block; width: 100%; height: 100%; position: absolute; inset: 0; object-fit: fill; pointer-events: none; }
   .marker-pad canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   .marker-pad > span { position: absolute; bottom: 12px; left: 12px; padding: 5px 8px; color: var(--muted); background: #eef0ffeb; border-radius: 6px; font-size: 11px; pointer-events: none; }
   .marker-help { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 10px 2px 0; }

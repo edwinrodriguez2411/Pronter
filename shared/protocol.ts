@@ -6,6 +6,10 @@ export const CHUNK_BYTES = 256 * 1024;
 export const TRANSFER_WINDOW = 4;
 export const ACK_TIMEOUT_MS = 15000;
 export const FILE_PICKER_GRACE_MS = 10 * 60 * 1000;
+export const MAX_PREVIEW_BYTES = 128 * 1024;
+export interface DisplayState { expanded: boolean; native: boolean; needsClick: boolean }
+export const emptyDisplay = (): DisplayState => ({ expanded: false, native: false, needsClick: false });
+export const displaySchema = z.object({ expanded: z.boolean(), native: z.boolean(), needsClick: z.boolean() }).strict();
 export interface PairPresence { selectingFile: boolean; reconnectUntil: number | null }
 export const FILE_ACCEPT = '.jpg,.jpeg,.png,.webp,.gif,.avif,.svg,.heic,.heif,.pdf,.ppt,.pptx,.mp3,.wav,.m4a,.aac,.ogg,.flac,.opus,.mp4,.webm,.mov,.mkv,.avi,.md,.markdown';
 export type FileKind = 'image' | 'pdf' | 'powerpoint' | 'audio' | 'video' | 'markdown';
@@ -52,6 +56,10 @@ export type CommandType = typeof COMMANDS[number];
 export interface Command { id: string; assetId: string | null; type: CommandType; value?: number | boolean | { x: number; y: number } }
 
 const id = z.string().min(1).max(100);
+export const previewViewSchema = z.object({ assetId: id, viewId: id, page: z.number().int().min(1).max(100000), zoom: z.number().min(0.25).max(4) }).strict();
+export const previewFrameSchema = previewViewSchema.extend({ sequence: z.number().int().min(1), width: z.number().int().min(1).max(800), height: z.number().int().min(1).max(800) }).strict();
+export type PreviewView = z.infer<typeof previewViewSchema>;
+export type PreviewFrame = z.infer<typeof previewFrameSchema>;
 export const INK_COLORS = { coral: '#e34234', blue: '#2448e8', yellow: '#f2b705', white: '#ffffff', dark: '#18234b' } as const;
 export type InkColor = keyof typeof INK_COLORS;
 export type InkWidth = 0.006 | 0.014;
@@ -59,7 +67,7 @@ export interface InkPoint { x: number; y: number }
 const inkBase = { id, assetId: id, page: z.number().int().min(1).max(100000) };
 const inkPoint = z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1) }).strict();
 export const inkSchema = z.discriminatedUnion('type', [
-  z.object({ ...inkBase, type: z.literal('begin'), strokeId: id, color: z.enum(['coral', 'blue', 'yellow', 'white', 'dark']), width: z.union([z.literal(0.006), z.literal(0.014)]), point: inkPoint }).strict(),
+  z.object({ ...inkBase, type: z.literal('begin'), strokeId: id, color: z.enum(['coral', 'blue', 'yellow', 'white', 'dark']), width: z.union([z.literal(0.006), z.literal(0.014)]), point: inkPoint, viewId: id.optional() }).strict(),
   z.object({ ...inkBase, type: z.literal('points'), strokeId: id, sequence: z.number().int().min(1).max(10000), points: z.array(inkPoint).min(1).max(32) }).strict(),
   z.object({ ...inkBase, type: z.literal('end'), strokeId: id }).strict(),
   z.object({ ...inkBase, type: z.literal('undo') }).strict(),

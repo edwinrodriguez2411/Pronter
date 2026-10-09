@@ -95,6 +95,92 @@ async function inkPixels(host: Page) {
   });
 }
 
+async function previewColor(phone: Page, x: number, y: number) {
+  return phone.locator('.marker-preview').evaluate((image: HTMLImageElement, { x, y }) => {
+    if (!image.complete || !image.naturalWidth) return [];
+    const canvas = document.createElement('canvas'); canvas.width = image.naturalWidth; canvas.height = image.naturalHeight;
+    const context = canvas.getContext('2d')!; context.drawImage(image, 0, 0);
+    return [...context.getImageData(Math.floor(x * canvas.width), Math.floor(y * canvas.height), 1, 1).data].slice(0, 3);
+  }, { x, y });
+}
+async function expectPreviewColor(phone: Page, x: number, y: number, color: number[]) {
+  await expect.poll(async () => {
+    const pixel = await previewColor(phone, x, y);
+    return pixel.length === 3 && pixel.every((value, index) => Math.abs(value - color[index]) < 24);
+  }).toBe(true);
+}
+async function previewTextPixels(phone: Page, blue = false) {
+  return phone.locator('.marker-preview').evaluate((image: HTMLImageElement, blue) => {
+    if (!image.complete || !image.naturalWidth) return 0;
+    const canvas = document.createElement('canvas'); canvas.width = image.naturalWidth; canvas.height = image.naturalHeight;
+    const context = canvas.getContext('2d')!; context.drawImage(image, 0, 0);
+    const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+    let count = 0; for (let index = 0; index < pixels.length; index += 4) if (blue ? pixels[index + 2] > pixels[index] + 40 : Math.max(pixels[index], pixels[index + 1], pixels[index + 2]) < 150) count++;
+    return count;
+  }, blue);
+}
+
+test('phone sees the file and synchronized ink, and controls fullscreen with an honest browser fallback', async ({ browser }) => {
+  const host = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const phone = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  await associate(host, phone);
+  // An expired host gesture cannot authorize native fullscreen remotely.
+  await host.evaluate(() => { document.documentElement.requestFullscreen = () => Promise.reject(new DOMException('User activation required', 'NotAllowedError')); });
+  await phone.getByRole('button', { name: 'Pantalla completa del PC', exact: true }).click();
+  await expect(host.locator('.host-app')).toHaveClass(/is-expanded/);
+  await expect(host.locator('.app-header')).toBeHidden();
+  await expect(host.getByRole('button', { name: 'Activar pantalla completa', exact: true })).toBeVisible();
+  await expect(phone.getByText(/Para ocultar las barras del navegador/)).toBeVisible();
+  await phone.getByRole('button', { name: 'Salir de pantalla completa del PC', exact: true }).click();
+  await expect(host.locator('.app-header')).toBeVisible();
+  await host.evaluate(() => { delete (document.documentElement as unknown as Record<string, unknown>).requestFullscreen; });
+  await upload(phone, 'vista.svg', 'image/svg+xml', svgFixture('#ff755c'));
+  await phone.getByRole('button', { name: 'Marcador', exact: true }).click();
+  const pad = phone.locator('.marker-pad'); await expect(pad).toHaveAttribute('aria-disabled', 'false');
+  await expectPreviewColor(phone, 0.1, 0.1, [255, 117, 92]);
+  await phone.getByRole('button', { name: 'Color azul' }).click(); await phone.getByLabel('Grosor del marcador').selectOption('0.014');
+  await drawOnPhone(phone, true);
+  await expect.poll(() => inkPixel(host, '.content-image img', 0.4, 0.35)).toEqual([36, 72, 232, 255]);
+  await expectPreviewColor(phone, 0.4, 0.35, [36, 72, 232]);
+  const originalView = await phone.locator('.marker-preview').getAttribute('data-view');
+  await phone.getByRole('button', { name: 'Acercar', exact: true }).click();
+  await expect(pad).toHaveAttribute('aria-disabled', 'false');
+  await expect(phone.locator('.marker-preview')).not.toHaveAttribute('data-view', originalView!);
+  await expectPreviewColor(phone, 0.1, 0.1, [255, 117, 92]);
+  await upload(phone, 'paginas.pdf', 'application/pdf', pdfFixture()); await expect(pad).toHaveAttribute('aria-disabled', 'false');
+  await expectPreviewColor(phone, 0.1, 0.1, [255, 255, 255]);
+  await expect.poll(() => previewTextPixels(phone)).toBeGreaterThan(100);
+  const firstPage = await phone.locator('.marker-preview').getAttribute('src');
+  await phone.getByRole('button', { name: 'Página siguiente' }).click(); await expect(pad).toHaveAttribute('aria-disabled', 'false');
+  await expect(phone.locator('.marker-preview')).toHaveAttribute('data-page', '2');
+  await expect(phone.locator('.marker-preview')).not.toHaveAttribute('src', firstPage!);
+  await upload(phone, 'diapositivas.pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation', pptxFixture()); await expect(pad).toHaveAttribute('aria-disabled', 'false');
+  await expectPreviewColor(phone, 0.1, 0.1, [238, 240, 255]);
+  await expect.poll(() => previewTextPixels(phone, true)).toBeGreaterThan(100);
+  await upload(phone, 'documento.md', 'text/markdown', Buffer.from('# Vista móvil\n\nDocumento que puedes señalar.'));
+  await expect(pad).toHaveAttribute('aria-disabled', 'false');
+  await expectPreviewColor(phone, 0.9, 0.9, [255, 255, 255]);
+  await expect.poll(() => previewTextPixels(phone)).toBeGreaterThan(100);
+  await upload(phone, 'video.mp4', 'video/mp4', readFileSync('tests/fixtures/sample.mp4')); await expect(pad).toHaveAttribute('aria-disabled', 'false');
+  await expect(phone.locator('.marker-preview')).toHaveJSProperty('naturalWidth', 800);
+  await upload(phone, 'presentacion.svg', 'image/svg+xml', svgFixture('#ff755c')); await expect(pad).toHaveAttribute('aria-disabled', 'false');
+  await drawOnPhone(phone); await expectPreviewColor(phone, 0.4, 0.35, [36, 72, 232]);
+  await phone.screenshot({ path: '.cache/mobile-file-preview.png', fullPage: true });
+  await host.screenshot({ path: '.cache/host-file-preview.png' });
+  await phone.getByRole('button', { name: 'Pantalla completa del PC', exact: true }).click();
+  await expect(host.locator('.host-app')).toHaveClass(/is-expanded/);
+  await expect(pad).toHaveAttribute('aria-disabled', 'false');
+  await expectPreviewColor(phone, 0.1, 0.1, [255, 117, 92]);
+  await phone.getByRole('button', { name: 'Salir de pantalla completa del PC', exact: true }).click();
+  await expect(host.locator('.host-app')).not.toHaveClass(/is-expanded/);
+  // Exiting genuine native fullscreen also works from the phone.
+  await host.getByRole('button', { name: 'Pantalla completa', exact: true }).click();
+  await expect(phone.getByRole('button', { name: 'Salir de pantalla completa del PC', exact: true })).toBeVisible();
+  await phone.getByRole('button', { name: 'Salir de pantalla completa del PC', exact: true }).click();
+  await expect.poll(() => host.evaluate(() => document.fullscreenElement === null)).toBe(true);
+  await host.close(); await phone.close();
+});
+
 test('phone and PC drawing follows zoom, pan, resize, reconnect, replacement and fullscreen', async ({ browser }) => {
   const host = await browser.newPage({ viewport: { width: 1365, height: 900 } });
   const phone = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });

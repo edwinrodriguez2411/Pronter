@@ -28,5 +28,5 @@ export function contentGeometry(slot: HTMLElement) {
     visible = intersect(visible, { left: clip.left - stage.left, top: clip.top - stage.top, width: clip.width, height: clip.height });
   }
   if (content.width <= 0 || content.height <= 0 || visible.width <= 0 || visible.height <= 0) return;
-  return { content, visible, stage, crop: { x: (visible.left - content.left) / content.width, y: (visible.top - content.top) / content.height, width: visible.width / content.width, height: visible.height / content.height } };
+  return { element, content, visible, stage, crop: { x: (visible.left - content.left) / content.width, y: (visible.top - content.top) / content.height, width: visible.width / content.width, height: visible.height / content.height } };
 }

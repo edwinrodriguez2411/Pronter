@@ -1,6 +1,6 @@
-import { useEffect, useRef, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { Check, PenLine, Trash2, Undo2 } from 'lucide-react';
-import { INK_COLORS, type InkColor, type InkPoint, type InkWidth } from '../../shared/protocol';
+import { INK_COLORS, MAX_PREVIEW_BYTES, previewFrameSchema, type Ack, type InkColor, type InkPoint, type InkWidth, type PreviewFrame, type PreviewView } from '../../shared/protocol';
 import { request, type Connection } from '../connection';
 import { InkGesture } from '../lib/ink-gesture';
 
@@ -18,13 +18,19 @@ export function MarkerTools({ color, width, onColor, onWidth, onUndo, onClear, d
   </div>;
 }
 
-export function MarkerPad({ connection, assetId, page, zoom, enabled, color, width, count, onError }: {
+export function MarkerPad({ connection, assetId, page, zoom, enabled, color, width, count, view, onError }: {
   connection: Connection; assetId: string; page: number; zoom: number; enabled: boolean; color: InkColor; width: InkWidth; count: number; onError: (message: string) => void;
+  view: PreviewView | null;
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const pointerId = useRef<number | undefined>(undefined);
   const sender = useRef<InkGesture | undefined>(undefined);
   const last = useRef<InkPoint | undefined>(undefined);
+  const [frame, setFrame] = useState<(PreviewFrame & { url: string }) | null>(null);
+  const [loaded, setLoaded] = useState(0);
+  const sequence = useRef(0);
+  const url = useRef('');
+  const ready = enabled && !!frame && loaded === frame.sequence && frame.assetId === assetId && frame.page === page && frame.zoom === zoom && frame.viewId === view?.viewId;
   const errorHandler = useRef(onError); errorHandler.current = onError;
   useEffect(() => {
     sender.current = new InkGesture((command) => request(connection.control, 'viewer:ink', command), (message) => { if (connection.snapshot.status === 'connected') errorHandler.current(message); });
@@ -33,8 +39,23 @@ export function MarkerPad({ connection, assetId, page, zoom, enabled, color, wid
     const unsubscribe = connection.subscribe(() => { if (connection.snapshot.status !== 'connected') sender.current?.cancel(); });
     return () => { unsubscribe(); sender.current?.cancel(); };
   }, [connection]);
+  useEffect(() => {
+    const remove = connection.onData('preview:frame', (raw: unknown, bytes: ArrayBuffer, ack: Ack) => {
+      const parsed = previewFrameSchema.safeParse(raw);
+      if (!parsed.success || bytes.byteLength > MAX_PREVIEW_BYTES) { ack({ ok: false }); return; }
+      const meta = parsed.data;
+      if (meta.sequence <= sequence.current) { ack({ ok: true }); return; }
+      sequence.current = meta.sequence;
+      const next = URL.createObjectURL(new Blob([bytes], { type: 'image/jpeg' }));
+      if (url.current) URL.revokeObjectURL(url.current); url.current = next;
+      setFrame({ ...meta, url: next }); ack({ ok: true });
+    });
+    connection.watchPreview(true);
+    return () => { connection.watchPreview(false); remove(); if (url.current) URL.revokeObjectURL(url.current); url.current = ''; };
+  }, [connection]);
   const clearPreview = () => { const node = canvas.current; node?.getContext('2d')?.clearRect(0, 0, node.width, node.height); };
-  useEffect(() => { sender.current?.cancel(); pointerId.current = undefined; last.current = undefined; clearPreview(); }, [assetId, page, zoom, enabled]);
+  useEffect(() => { sender.current?.cancel(); pointerId.current = undefined; last.current = undefined; clearPreview(); }, [assetId, page, zoom, enabled, view?.viewId]);
+  useEffect(() => { if (pointerId.current === undefined) clearPreview(); }, [loaded]);
   useEffect(() => { if (!count) clearPreview(); }, [count]);
   const point = (event: ReactPointerEvent<HTMLDivElement> | PointerEvent, node: HTMLDivElement): InkPoint => {
     const rect = node.getBoundingClientRect();
@@ -42,7 +63,7 @@ export function MarkerPad({ connection, assetId, page, zoom, enabled, color, wid
   };
   const preview = (position: InkPoint) => {
     const node = canvas.current, context = node?.getContext('2d'); if (!node || !context) return;
-    context.lineCap = 'round'; context.lineJoin = 'round'; context.lineWidth = width * node.height;
+    context.lineCap = 'round'; context.lineJoin = 'round'; context.lineWidth = width * Math.min(node.width, node.height);
     context.strokeStyle = context.fillStyle = INK_COLORS[color]; context.beginPath();
     if (last.current) { context.moveTo(last.current.x * node.width, last.current.y * node.height); context.lineTo(position.x * node.width, position.y * node.height); context.stroke(); }
     else { context.arc(position.x * node.width, position.y * node.height, context.lineWidth / 2, 0, Math.PI * 2); context.fill(); }
@@ -53,22 +74,24 @@ export function MarkerPad({ connection, assetId, page, zoom, enabled, color, wid
     if (event.type === 'pointerup') { const position = point(event, event.currentTarget); sender.current?.move(position); preview(position); }
     pointerId.current = undefined; last.current = undefined; sender.current?.end();
   };
-  return <div className={`marker-section ${enabled ? '' : 'is-disabled'}`}>
+  return <div className={`marker-section ${ready ? '' : 'is-disabled'}`}>
     <div className="section-caption"><span><PenLine size={18} aria-hidden="true" />Marcador</span><span>Página {page}</span></div>
-    <div className="marker-pad" role="application" aria-label="Panel para dibujar sobre la presentación" aria-disabled={!enabled}
+    <div className="marker-pad" role="application" aria-label="Panel para dibujar sobre la presentación" aria-disabled={!ready} style={{ aspectRatio: frame && frame.assetId === assetId ? `${frame.width} / ${frame.height}` : '5 / 3' }}
       onPointerDown={(event) => {
-        if (!enabled || event.button !== 0 || !event.isPrimary || pointerId.current !== undefined) return;
+        if (!ready || event.button !== 0 || !event.isPrimary || pointerId.current !== undefined) return;
         event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId); pointerId.current = event.pointerId;
         clearPreview(); last.current = undefined; onError('');
-        const position = point(event, event.currentTarget); preview(position); sender.current?.begin(assetId, page, color, width, position);
+        const position = point(event, event.currentTarget); preview(position); sender.current?.begin(assetId, page, color, width, position, frame!.viewId);
       }}
       onPointerMove={(event) => {
-        if (event.pointerId !== pointerId.current || !enabled) return;
+        if (event.pointerId !== pointerId.current || !ready) return;
         const samples = event.nativeEvent.getCoalescedEvents?.();
         for (const sample of samples?.length ? samples : [event.nativeEvent]) { const position = point(sample, event.currentTarget); preview(position); sender.current?.move(position); }
       }} onPointerUp={stop} onPointerCancel={stop} onLostPointerCapture={stop}>
-      <canvas ref={canvas} width={800} height={480} aria-hidden="true" /><span>Dibuja aquí mirando la pantalla</span>
+      {frame && frame.assetId === assetId && <img className="marker-preview" src={frame.url} alt={`Vista de ${connection.snapshot.viewer.name}, página ${frame.page}`} draggable={false} data-page={frame.page} data-view={frame.viewId} onLoad={() => setLoaded(frame.sequence)} />}
+      <canvas ref={canvas} width={frame?.width || 800} height={frame?.height || 480} aria-hidden="true" />
+      {!ready && <span role="status">{enabled ? 'Actualizando la vista del PC…' : 'Esperando la pantalla…'}</span>}
     </div>
-    <p className="marker-help">Este panel representa el área visible del archivo. Los trazos se conservan en cada página.</p>
+    <p className="marker-help">Dibuja sobre el archivo que ves aquí. La vista sigue la página y el zoom del PC; los trazos se conservan en cada página.</p>
   </div>;
 }

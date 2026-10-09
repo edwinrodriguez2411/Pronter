@@ -57,10 +57,10 @@ El plan gratuito permite uso ocasional y pruebas; no garantiza disponibilidad co
 
 ## Presentar
 
-1. Abre Pronter en el computador y, si quieres, activa pantalla completa con el botón de la esquina.
+1. Abre Pronter en el computador. Desde el mando del celular puedes pulsar **Pantalla completa del PC** para ampliar la presentación y ocultar sus barras de herramientas.
 2. Escanea el QR con la cámara del celular. Se abre el mando en el mismo sitio.
 3. Selecciona un archivo. Se prepara y muestra en el computador; los controles cambian según su formato.
-4. Usa **Láser** para señalar mientras mantienes y deslizas el dedo. Elige **Marcador** para dibujar desde el panel del celular mirando la pantalla del computador; el panel representa el área visible del archivo.
+4. Usa **Láser** para señalar mientras mantienes y deslizas el dedo. Elige **Marcador** para ver en el celular el archivo que muestra el computador y dibujar directamente sobre él. La vista incluye los trazos recibidos, la página actual y el área visible después del zoom o desplazamiento.
 5. El marcador ofrece cinco colores, dos grosores, **Deshacer** y **Borrar**. También puedes activar **Dibujar en el PC** y trazar directamente sobre el contenido. Cada página o diapositiva conserva sus dibujos; borrar afecta solo a la página actual. Los trazos acompañan al contenido con el zoom, el desplazamiento y los cambios de tamaño.
 6. Envía otro archivo para sustituir el contenido y eliminar los trazos anteriores. El anterior permanece hasta que el nuevo esté listo. Si falla, se conservan el archivo anterior y sus dibujos y se muestra el error.
 7. Pulsa **Salir** en el celular: el computador muestra «Sesión terminada», libera el contenido y los trazos y recarga después de dos segundos con otro QR.
@@ -71,7 +71,9 @@ Mientras la pantalla confirma un cambio de página, zoom o desplazamiento, el ma
 
 Las pruebas locales por IP funcionan con HTTP, también para enviar archivos y usar los controles. Después de actualizar la aplicación o reiniciar el servidor, recarga la página del computador, cierra la pestaña anterior del celular y escanea el QR nuevo para cargar la misma versión en ambos dispositivos.
 
-Algunos navegadores requieren un clic en **Activar audio** en el computador antes de permitir sonido. La pantalla completa también se activa desde el computador porque el navegador exige un gesto local. El botón muestra **Salir de pantalla completa** cuando está activada; puedes alternarla con **F** y salir con **Esc**.
+Algunos navegadores requieren un clic en **Activar audio** en el computador antes de permitir sonido. El botón de pantalla completa del computador muestra **Salir de pantalla completa** cuando está activada; puedes alternarla con **F** y salir con **Esc**.
+
+El mando intenta activar también la pantalla completa nativa del PC. Chrome y otros navegadores suelen exigir un gesto reciente en ese mismo computador: un toque en el celular no transfiere esa autorización. Cuando el navegador lo bloquea, la presentación ocupa toda su ventana y aparece **Activar pantalla completa** en el PC para ocultar también sus barras con un clic. El mando explica esa situación y permite salir del modo ampliado o de la pantalla completa nativa. [Requisito de activación del navegador](https://developer.mozilla.org/en-US/docs/Web/API/Element/requestFullscreen).
 
 ## Visores y límites
 
@@ -109,6 +111,8 @@ flowchart LR
 Los archivos y los dibujos solo se acumulan en el navegador anfitrión. El celular muestra temporalmente el gesto actual como guía. El servidor conserva temporalmente los identificadores de asociación, las claves aleatorias y el estado del visor; retransmite un número limitado de fragmentos y los lotes del marcador, sin ensamblar el archivo, conservar los trazos ni escribirlos a disco. Al salir o vencer el plazo se elimina la asociación. Al sustituir contenido se destruye su visor, se eliminan sus dibujos y se revocan sus URLs temporales.
 
 Los puntos del marcador viajan en lotes de hasta 32, con un máximo de cuatro confirmaciones pendientes y una cola limitada. Se confirma el inicio del trazo antes de enviar sus puntos; al cortar la conexión o cambiar de vista se descartan los lotes pendientes y se conserva únicamente lo que la pantalla recibió. El orden del canal está respaldado por las [garantías de Socket.IO](https://socket.io/docs/v4/delivery-guarantees/).
+
+Mientras el marcador está abierto, el PC genera vistas JPEG del área visible con sus dibujos: hasta 800 píxeles por lado, 128 KiB por imagen y una confirmación pendiente como máximo. Viajan por el canal de archivos en sentido contrario, sin bloquear el canal de control. Las vistas estáticas se envían cuando cambian; video y PowerPoint se actualizan aproximadamente cada 600 ms, según el tiempo de procesamiento y la red. Es una vista para señalar y dibujar, no una retransmisión de video a alta frecuencia. El celular descarta la imagen anterior, conserva solo la actual en RAM y revoca su URL al cerrar el marcador o salir. El servidor valida origen, tamaño y página y retransmite sin guardar la imagen. Las vistas consumen ancho de banda mientras el marcador está abierto. Si el PC cambia de vista, el celular espera la imagen correspondiente antes de admitir un nuevo trazo.
 
 La app no utiliza cookies, localStorage, sessionStorage, IndexedDB, service workers, métricas, cuentas ni registros de solicitudes. Fuentes, bibliotecas y WASM se sirven desde el propio sitio. El navegador puede cachear esos recursos públicos; eso no es un historial de presentaciones. La política de registros del proveedor de alojamiento se configura por separado. El cifrado de transporte depende de publicar con HTTPS.
 

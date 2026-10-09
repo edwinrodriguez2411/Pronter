@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import type { Server as HttpServer } from 'node:http';
 import { Server, type Socket } from 'socket.io';
-import { ACK_TIMEOUT_MS, CHUNK_BYTES, TRANSFER_WINDOW, FILE_PICKER_GRACE_MS, commandSchema, emptyViewer, fileMetaSchema, inkSchema, kindFromName, pointerSchema, viewerSchema, type Ack, type Credentials, type FileMeta, type Role, type ViewerState } from '../shared/protocol.js';
+import { ACK_TIMEOUT_MS, CHUNK_BYTES, TRANSFER_WINDOW, FILE_PICKER_GRACE_MS, MAX_PREVIEW_BYTES, commandSchema, displaySchema, emptyViewer, fileMetaSchema, inkSchema, kindFromName, pointerSchema, previewFrameSchema, previewViewSchema, viewerSchema, type Ack, type Credentials, type FileMeta, type Role, type ViewerState } from '../shared/protocol.js';
 
 interface Transfer { meta: FileMeta; next: number; bytes: number; pending: number; acknowledged: Set<number> }
 interface Pair {
@@ -146,6 +146,25 @@ export function createBroker(httpServer: HttpServer, { graceMs = 20000, pickerGr
       pair.state = parsed.data;
       pair.controller?.emit('viewer:state', pair.state);
     });
+    socket.on('display:state', (raw: unknown) => {
+      const pair = forSocket(socket); const parsed = displaySchema.safeParse(raw);
+      if (pair?.host === socket && parsed.success) pair.controller?.emit('display:state', parsed.data);
+    });
+    socket.on('display:command', (expanded: unknown, ack: Ack) => {
+      const pair = forSocket(socket);
+      if (!pair || pair.controller !== socket || !pair.host?.connected || typeof expanded !== 'boolean') return fail(ack, 'OFFLINE', 'La pantalla no está conectada.');
+      pair.host.timeout(5000).emit('display:command', expanded, (error: Error | null, reply: { ok: boolean }) => {
+        if (error || !reply?.ok) fail(ack, 'DISPLAY_TIMEOUT', 'La pantalla no confirmó el cambio.'); else ok(ack);
+      });
+    });
+    socket.on('preview:watch', (watch: unknown) => {
+      const pair = forSocket(socket);
+      if (pair?.controller === socket && typeof watch === 'boolean') pair.host?.emit('preview:watch', watch);
+    });
+    socket.on('preview:view', (raw: unknown) => {
+      const pair = forSocket(socket); const parsed = previewViewSchema.safeParse(raw);
+      if (pair?.host === socket && parsed.success && parsed.data.assetId === pair.state.assetId) pair.controller?.emit('preview:view', parsed.data);
+    });
     socket.on('viewer:command', (raw: unknown, ack: Ack) => {
       const pair = forSocket(socket);
       if (!pair || pair.controller !== socket || !pair.host?.connected) return fail(ack, 'OFFLINE', 'La pantalla no está conectada.');
@@ -229,6 +248,20 @@ export function createBroker(httpServer: HttpServer, { graceMs = 20000, pickerGr
     if (socket.data.role === 'host') pair.hostData = socket;
     else pair.controllerData = socket;
     availability(pair);
+    let previewInFlight = false;
+    let lastPreview = 0;
+    socket.on('preview:frame', (raw: unknown, bytes: unknown, ack: Ack) => {
+      const current = forSocket(socket);
+      if (!current || current.hostData !== socket || !current.controllerData?.connected || !current.host?.connected) return fail(ack, 'OFFLINE', 'El celular no está conectado.');
+      const parsed = previewFrameSchema.safeParse(raw);
+      if (!parsed.success || parsed.data.assetId !== current.state.assetId || parsed.data.page !== current.state.page || !Buffer.isBuffer(bytes) || bytes.length > MAX_PREVIEW_BYTES || bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return fail(ack, 'INVALID_PREVIEW', 'Vista previa no válida.');
+      if (previewInFlight || Date.now() - lastPreview < 450) return fail(ack, 'PREVIEW_BUSY', 'Espera la vista previa anterior.');
+      previewInFlight = true; lastPreview = Date.now();
+      current.controllerData.timeout(3000).emit('preview:frame', parsed.data, bytes, (error: Error | null, reply: { ok: boolean }) => {
+        previewInFlight = false;
+        if (error || !reply?.ok) fail(ack, 'PREVIEW_TIMEOUT', 'El celular no confirmó la vista previa.'); else ok(ack);
+      });
+    });
     socket.on('transfer:begin', (raw: unknown, ack: Ack) => {
       const current = forSocket(socket);
       if (!current || current.controllerData !== socket || !current.controller?.connected || !current.hostData?.connected) return fail(ack, 'OFFLINE', 'La pantalla aún no está lista para recibir.');

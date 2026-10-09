@@ -3,6 +3,7 @@ import { CHUNK_BYTES, emptyViewer, type Ack, type Command, type FileMeta, type I
 import { createViewer, type ViewerEngine } from './viewers/engine';
 import { contentGeometry } from './lib/content-geometry';
 import { AnnotationLayer } from './viewers/annotation-layer';
+import { HostPreview } from './lib/host-preview';
 
 export class Presenter {
   private incoming?: { meta: FileMeta; parts: BlobPart[]; bytes: number; next: number };
@@ -18,8 +19,10 @@ export class Presenter {
   private destroyed = false;
   private ink: AnnotationLayer;
   private receivedInk = new Set<string>();
+  private preview: HostPreview;
   constructor(private connection: Connection, private slot: HTMLElement, private pointer: HTMLElement) {
     this.ink = new AnnotationLayer(slot, () => this.publish({}), (notice) => this.publish({ notice }));
+    this.preview = new HostPreview(connection, slot, () => this.state);
     this.removers.push(connection.onData('transfer:begin', (meta: FileMeta, ack: Ack) => {
       this.cancelPending();
       this.pendingId = meta.id;
@@ -87,6 +90,7 @@ export class Presenter {
     this.slot.classList.toggle('is-black', this.state.black);
     if (this.state.black) this.pointer.style.opacity = '0';
     if (!this.destroyed) this.connection.publish({ ...this.state });
+    this.preview?.changed();
   }
   private cancelPending() {
     this.generation++;
@@ -128,19 +132,22 @@ export class Presenter {
     const movesView = ['next', 'previous', 'page', 'zoom', 'fit', 'pan', 'scroll', 'static'].includes(command.type);
     if (movesView) this.ink.suspend(true);
     try { await this.engine?.command(command); }
-    finally { if (movesView) this.ink.suspend(false); }
+    finally { if (movesView) { this.ink.suspend(false); this.preview.refreshView(); this.preview.changed(); } }
   }
   setDrawing(enabled: boolean, color: InkColor, width: InkWidth) { this.ink.configure(enabled, color, width); }
+  refreshPreview() { this.preview.refreshView(true); this.preview.changed(); }
   draw(command: InkCommand) {
     if (this.destroyed) throw new Error('La presentación terminó.');
     if (this.receivedInk.has(command.id)) return;
+    if (command.type === 'begin' && command.viewId && !this.preview.matches(command.viewId)) throw new Error('La vista cambió. Espera la vista actual antes de dibujar.');
     this.ink.apply(command); this.receivedInk.add(command.id);
+    this.preview.changed();
     if (this.receivedInk.size > 256) this.receivedInk.delete(this.receivedInk.values().next().value!);
   }
   async activate() { await this.engine?.activate(); }
   destroy() {
     this.destroyed = true; this.cancelPending(); this.engine?.destroy(); this.engine = undefined;
-    this.ink.destroy(); this.receivedInk.clear();
+    this.preview.destroy(); this.ink.destroy(); this.receivedInk.clear();
     this.state = emptyViewer(); this.receivedCommands.clear(); clearTimeout(this.pointerTimer); this.pointer.style.opacity = '0';
     for (const remove of this.removers) remove(); this.removers.length = 0;
   }
