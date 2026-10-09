@@ -43,7 +43,7 @@ export class Connection {
   private peerReady = false;
   private hasPartner = false;
   private selectingFile = false;
-  private wake = () => { if (document.visibilityState === 'visible') this.recover(); };
+  private wake = () => { if (document.visibilityState === 'visible') this.recover(true); };
   constructor(readonly role: Role) {
     this.scannedToken = role === 'controller' ? window.location.hash.slice(1) : '';
     this.control = io('/control', { transports: ['websocket'], autoConnect: false, reconnectionDelay: 500, reconnectionDelayMax: 2000 });
@@ -139,11 +139,20 @@ export class Connection {
     socket.on('pair:ended', (reason: string) => this.finish(reason));
     socket.connect();
   }
-  recover() {
+  recover(restartPending = false) {
     if (!this.started || this.disposed || ['ended', 'error'].includes(this.snapshot.status)) return;
-    if (!this.control.connected) { if (!this.control.active) this.control.connect(); return; }
+    if (!this.control.connected) {
+      // A transport started while offline can still be waiting for its handshake.
+      // Resume/online events must restart it instead of waiting through the reservation.
+      if (restartPending) this.control.disconnect();
+      if (restartPending || !this.control.active) this.control.connect();
+      return;
+    }
     if (this.associatedId !== this.control.id) { void this.associate(); return; }
-    if (this.data && !this.data.connected && !this.data.active) this.data.connect();
+    if (this.data && !this.data.connected) {
+      if (restartPending) this.data.disconnect();
+      if (restartPending || !this.data.active) this.data.connect();
+    }
   }
   setFileSelection(selecting: boolean) {
     if (this.role !== 'controller') return;

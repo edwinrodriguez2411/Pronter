@@ -31,14 +31,16 @@ async function upload(phone: Page, name: string, mimeType: string, buffer: Buffe
   await expect(phone.locator('.current-file strong')).toHaveText(name);
 }
 
-async function networkInterruption(page: Page) {
+async function networkInterruption(page: Page, stallOfflineHandshake = false) {
   let offline = false;
+  let offlineAttempts = 0;
   const transports: WebSocketRoute[] = [];
   await page.routeWebSocket('**/socket.io/**', (socket) => {
-    if (offline) { void socket.close(); return; }
+    if (offline) { offlineAttempts++; if (!stallOfflineHandshake) void socket.close(); return; }
     transports.push(socket, socket.connectToServer());
   });
   return {
+    get offlineAttempts() { return offlineAttempts; },
     async disconnect() {
       offline = true;
       await page.context().setOffline(true);
@@ -49,6 +51,20 @@ async function networkInterruption(page: Page) {
     async reconnect() { offline = false; await page.context().setOffline(false); },
   };
 }
+
+test('returning online restarts a stalled handshake and permits the next file', async ({ browser }) => {
+  const host = await browser.newPage(); const phone = await browser.newPage();
+  const network = await networkInterruption(phone, true);
+  await associate(host, phone); await upload(phone, 'primera.svg', 'image/svg+xml', svgFixture());
+  await network.disconnect();
+  await expect.poll(() => network.offlineAttempts).toBeGreaterThan(0);
+  await network.reconnect();
+  await phone.evaluate(() => window.dispatchEvent(new Event('online')));
+  await expect(phone.getByText('Celular conectado', { exact: true })).toBeVisible({ timeout: 6000 });
+  await upload(phone, 'despues-del-corte.pdf', 'application/pdf', pdfFixture());
+  await expect(phone.getByRole('button', { name: 'Página siguiente' })).toBeEnabled();
+  await host.close(); await phone.close();
+});
 
 async function drawOnPhone(phone: Page, touch = false) {
   const pad = phone.locator('.marker-pad'); await pad.scrollIntoViewIfNeeded();
@@ -119,6 +135,120 @@ async function previewTextPixels(phone: Page, blue = false) {
     return count;
   }, blue);
 }
+
+test('clearing and undoing remove ink from both screens through repeated file replacements', async ({ browser }) => {
+  test.setTimeout(90000);
+  const host = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const phone = await browser.newPage({ viewport: { width: 375, height: 812 }, isMobile: true, hasTouch: true });
+  const errors: string[] = []; host.on('pageerror', (error) => errors.push(error.message)); phone.on('pageerror', (error) => errors.push(error.message));
+  await associate(host, phone);
+  await upload(phone, 'primera.svg', 'image/svg+xml', svgFixture('#ff755c'));
+  await phone.getByRole('button', { name: 'Marcador', exact: true }).click();
+  await phone.getByRole('button', { name: 'Color azul' }).click();
+  await phone.getByLabel('Grosor del marcador').selectOption('0.014');
+  for (let index = 0; index < 3; index++) {
+    await drawOnPhone(phone, true);
+    await expectPreviewColor(phone, 0.4, 0.35, [36, 72, 232]);
+    await phone.getByRole('button', { name: index === 1 ? 'Deshacer último trazo' : 'Borrar trazos de esta página' }).click();
+    await expect.poll(() => inkPixels(host)).toBe(0);
+    await expectPreviewColor(phone, 0.4, 0.35, [255, 117, 92]);
+  }
+  for (let index = 0; index < 3; index++) {
+    await upload(phone, `paginas-${index}.pdf`, 'application/pdf', pdfFixture());
+    await drawOnPhone(phone, true);
+    await phone.getByRole('button', { name: 'Borrar trazos de esta página' }).click();
+    await expect.poll(() => inkPixels(host)).toBe(0);
+    await expectPreviewColor(phone, 0.4, 0.35, [255, 255, 255]);
+    await upload(phone, `slides-${index}.pptx`, 'application/vnd.openxmlformats-officedocument.presentationml.presentation', pptxFixture());
+    await drawOnPhone(phone, true);
+    await upload(phone, `imagen-${index}.svg`, 'image/svg+xml', svgFixture('#ff755c'));
+    await expect(phone.locator('.marker-pad')).toHaveAttribute('aria-disabled', 'false');
+    await expectPreviewColor(phone, 0.4, 0.35, [255, 117, 92]);
+    await expect(host.locator('.viewer-layer')).toHaveCount(1);
+    await expect(phone.locator('.upload-progress')).toHaveCount(0);
+  }
+  expect(errors).toEqual([]);
+  await phone.screenshot({ path: '.cache/marker-clear-fixed.png', fullPage: true });
+  await host.close(); await phone.close();
+});
+
+test('a stalled phone preview cannot retain erased ink or block a replacement file', async ({ browser }) => {
+  const host = await browser.newPage();
+  const phone = await browser.newPage({ viewport: { width: 375, height: 812 }, isMobile: true, hasTouch: true });
+  let holdZoomAck = false, zoomAck = '', releaseAck: (() => void) | undefined;
+  await phone.routeWebSocket('**/socket.io/**', (socket) => {
+    const server = socket.connectToServer();
+    socket.onMessage((message) => {
+      if (holdZoomAck && typeof message === 'string' && message.includes('"viewer:command"') && message.includes('"zoom"')) zoomAck = message.match(/^42\/control,(\d+)/)?.[1] || '';
+      server.send(message);
+    });
+    server.onMessage((message) => {
+      if (zoomAck && typeof message === 'string' && message.startsWith(`43/control,${zoomAck}[`)) { releaseAck = () => socket.send(message); return; }
+      socket.send(message);
+    });
+  });
+  await associate(host, phone); await upload(phone, 'antes.svg', 'image/svg+xml', svgFixture('#ff755c'));
+  await phone.getByRole('button', { name: 'Marcador', exact: true }).click();
+  await phone.getByRole('button', { name: 'Color azul' }).click();
+  await phone.getByLabel('Grosor del marcador').selectOption('0.014');
+  await drawOnPhone(phone, true); await expectPreviewColor(phone, 0.4, 0.35, [36, 72, 232]);
+  // Fault injection: browser image export never invokes its callback. The app must
+  // cancel a superseded capture and bound a stalled one, instead of keeping busy forever.
+  await host.evaluate(() => {
+    const original = HTMLCanvasElement.prototype.toBlob;
+    (window as unknown as Record<string, unknown>).previewStalled = false;
+    HTMLCanvasElement.prototype.toBlob = function (callback, type, quality) {
+      if (type === 'image/jpeg') { (window as unknown as Record<string, unknown>).previewStalled = true; return; }
+      original.call(this, callback, type, quality);
+    };
+    (window as unknown as Record<string, unknown>).restoreExport = () => { HTMLCanvasElement.prototype.toBlob = original; };
+  });
+  await phone.getByRole('button', { name: 'Borrar trazos de esta página' }).click();
+  await expect.poll(() => inkPixels(host)).toBe(0);
+  await expect.poll(() => host.evaluate(() => (window as unknown as Record<string, unknown>).previewStalled)).toBe(true);
+  await expect(phone.locator('.marker-preview')).toHaveCount(0);
+  await expect(phone.locator('.marker-pad')).toHaveAttribute('aria-disabled', 'true');
+  await host.evaluate(() => { ((window as unknown as Record<string, () => void>).restoreExport)(); });
+  await expectPreviewColor(phone, 0.4, 0.35, [255, 117, 92]);
+  await host.evaluate(() => {
+    (window as unknown as Record<string, unknown>).previewStalled = false;
+    HTMLCanvasElement.prototype.toBlob = function () { (window as unknown as Record<string, unknown>).previewStalled = true; };
+  });
+  await drawOnPhone(phone, true);
+  await expect.poll(() => host.evaluate(() => (window as unknown as Record<string, unknown>).previewStalled)).toBe(true);
+  await upload(phone, 'despues.svg', 'image/svg+xml', svgFixture('#f2b705'));
+  await host.evaluate(() => { ((window as unknown as Record<string, () => void>).restoreExport)(); });
+  await expect(phone.locator('.marker-pad')).toHaveAttribute('aria-disabled', 'false');
+  await expectPreviewColor(phone, 0.1, 0.1, [242, 183, 5]);
+  // The next upload supersedes an image still decoding. Its late completion must
+  // not replace the latest file, leave hidden layers behind or keep controls locked.
+  await host.evaluate(() => {
+    const decode = HTMLImageElement.prototype.decode; let delayed = false;
+    HTMLImageElement.prototype.decode = async function () {
+      await decode.call(this);
+      if (!delayed) { delayed = true; (window as unknown as Record<string, unknown>).decodeDelayed = true; await new Promise((resolve) => setTimeout(resolve, 1800)); }
+    };
+  });
+  await phone.locator('input[type=file]').setInputFiles({ name: 'lenta.svg', mimeType: 'image/svg+xml', buffer: svgFixture() });
+  await expect.poll(() => host.evaluate(() => (window as unknown as Record<string, unknown>).decodeDelayed)).toBe(true);
+  await upload(phone, 'ultima.svg', 'image/svg+xml', svgFixture('#ff755c'));
+  await expect(phone.locator('.marker-pad')).toHaveAttribute('aria-disabled', 'false');
+  await expectPreviewColor(phone, 0.1, 0.1, [255, 117, 92]);
+  await expect(host.locator('.viewer-layer')).toHaveCount(1);
+  holdZoomAck = true;
+  await phone.getByRole('button', { name: 'Acercar', exact: true }).click();
+  await expect(phone.locator('.zoom-controls')).toContainText('125%');
+  await expect.poll(() => !!releaseAck).toBe(true);
+  await upload(phone, 'final.svg', 'image/svg+xml', svgFixture('#f2b705'));
+  // An ACK for the old file is still held, but new-file controls must be usable.
+  await expect(phone.locator('.marker-pad')).toHaveAttribute('aria-disabled', 'false');
+  await expect(phone.getByRole('button', { name: 'Acercar', exact: true })).toBeEnabled();
+  holdZoomAck = false; releaseAck!(); zoomAck = '';
+  await phone.waitForTimeout(1800);
+  await expect(phone.locator('.current-file strong')).toHaveText('final.svg');
+  await expect(host.locator('.viewer-layer')).toHaveCount(1);
+  await host.close(); await phone.close();
+});
 
 test('phone sees the file and synchronized ink, and controls fullscreen with an honest browser fallback', async ({ browser }) => {
   const host = await browser.newPage({ viewport: { width: 1280, height: 900 } });

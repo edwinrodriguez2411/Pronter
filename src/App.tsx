@@ -302,13 +302,14 @@ function ControlPage() {
   const [inkWidth, setInkWidth] = useState<InkWidth>(0.006);
   const [viewPending, setViewPending] = useState(false);
   const [displayPending, setDisplayPending] = useState(false);
-  const viewPendingRef = useRef(false);
+  const viewPendingRef = useRef<string | null>(null);
   const wakeLock = useRef<WakeLockSentinel | undefined>(undefined);
   const state = snapshot.viewer;
   const connected = snapshot.status === 'connected';
-  const controlsReady = connected && !viewPending;
+  const controlsReady = connected && !viewPending && state.phase === 'idle' && !upload?.sending;
   const canSend = connected && snapshot.dataReady;
   useEffect(() => { if (connected) setError(''); }, [connected]);
+  useEffect(() => { viewPendingRef.current = null; setViewPending(false); setError(''); }, [state.assetId, connected]);
   useEffect(() => {
     const input = picker.current;
     const cancelled = () => connection.setFileSelection(false);
@@ -333,18 +334,20 @@ function ControlPage() {
     return () => { document.removeEventListener('visibilitychange', visibility); void wakeLock.current?.release(); };
   }, [connected]);
   const command = (type: CommandType, value?: Command['value']) => {
-    if (!connected || viewPendingRef.current) return;
+    if (!connected || viewPendingRef.current || state.phase !== 'idle' || upload?.sending) return;
+    const id = createId(), assetId = state.assetId;
     const movesView = ['next', 'previous', 'page', 'zoom', 'fit', 'pan', 'scroll', 'static'].includes(type);
-    if (movesView) { viewPendingRef.current = true; setViewPending(true); }
+    if (movesView) { viewPendingRef.current = id; setViewPending(true); }
     setError('');
-    void request(connection.control, 'viewer:command', { id: createId(), assetId: state.assetId, type, value } satisfies Command)
-      .catch((reason: Error) => setError(reason.message))
-      .finally(() => { if (movesView) { viewPendingRef.current = false; setViewPending(false); } });
+    void request(connection.control, 'viewer:command', { id, assetId, type, value } satisfies Command)
+      .catch((reason: Error) => { if (connection.snapshot.status === 'connected' && connection.snapshot.viewer.assetId === assetId) setError(reason.message); })
+      .finally(() => { if (movesView && viewPendingRef.current === id) { viewPendingRef.current = null; setViewPending(false); } });
   };
   const editInk = (type: 'undo' | 'clear') => {
-    if (!connected || viewPendingRef.current || !state.assetId) return;
+    if (!controlsReady || viewPendingRef.current || !state.assetId) return;
+    const assetId = state.assetId;
     setError('');
-    void request(connection.control, 'viewer:ink', { id: createId(), assetId: state.assetId, page: state.page, type } satisfies InkCommand).catch((reason: Error) => setError(reason.message));
+    void request(connection.control, 'viewer:ink', { id: createId(), assetId, page: state.page, type } satisfies InkCommand).catch((reason: Error) => { if (connection.snapshot.status === 'connected' && connection.snapshot.viewer.assetId === assetId) setError(reason.message); });
   };
   const leave = () => {
     cancel(); setRunning(false);

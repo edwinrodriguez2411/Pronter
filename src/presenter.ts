@@ -8,7 +8,6 @@ import { HostPreview } from './lib/host-preview';
 export class Presenter {
   private incoming?: { meta: FileMeta; parts: BlobPart[]; bytes: number; next: number };
   private engine?: ViewerEngine;
-  private candidate?: ViewerEngine;
   private pending?: AbortController;
   private generation = 0;
   private removers: (() => void)[] = [];
@@ -95,7 +94,6 @@ export class Presenter {
   private cancelPending() {
     this.generation++;
     this.pending?.abort(); this.pending = undefined;
-    this.candidate?.destroy(); this.candidate = undefined;
     if (this.incoming) this.incoming.parts.length = 0;
     this.incoming = undefined; this.pendingId = undefined;
   }
@@ -113,9 +111,8 @@ export class Presenter {
         latest = values;
         if (committed && !this.destroyed && this.engine?.state.assetId === meta.id) this.publish({ ...values, notice: this.state.notice || values.notice, phase: this.state.phase, progress: this.state.progress });
       }, (phase, progress) => { if (generation === this.generation) this.publish({ phase, progress }); });
-      this.candidate = engine;
       if (generation !== this.generation || this.destroyed) { engine.destroy(); return; }
-      this.engine?.destroy(); this.engine = engine; this.candidate = undefined;
+      this.engine?.destroy(); this.engine = engine;
       layer.classList.remove('is-candidate');
       committed = true; this.pending = undefined; this.pendingId = undefined;
       this.receivedCommands.clear();
@@ -125,6 +122,8 @@ export class Presenter {
     } catch (error) {
       layer.remove();
       if (generation === this.generation && !this.destroyed) this.publish({ phase: 'idle', progress: 0, notice: (error as Error).name === 'AbortError' ? '' : friendlyError(error) });
+    } finally {
+      if (this.pending === controller) { this.pending = undefined; this.pendingId = undefined; }
     }
   }
   async command(command: Command) {
@@ -141,7 +140,8 @@ export class Presenter {
     if (this.receivedInk.has(command.id)) return;
     if (command.type === 'begin' && command.viewId && !this.preview.matches(command.viewId)) throw new Error('La vista cambió. Espera la vista actual antes de dibujar.');
     this.ink.apply(command); this.receivedInk.add(command.id);
-    this.preview.changed();
+    if (command.type === 'clear' || command.type === 'undo') this.preview.invalidate();
+    else this.preview.changed();
     if (this.receivedInk.size > 256) this.receivedInk.delete(this.receivedInk.values().next().value!);
   }
   async activate() { await this.engine?.activate(); }

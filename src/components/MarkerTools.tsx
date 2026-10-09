@@ -30,7 +30,8 @@ export function MarkerPad({ connection, assetId, page, zoom, enabled, color, wid
   const [loaded, setLoaded] = useState(0);
   const sequence = useRef(0);
   const url = useRef('');
-  const ready = enabled && !!frame && loaded === frame.sequence && frame.assetId === assetId && frame.page === page && frame.zoom === zoom && frame.viewId === view?.viewId;
+  const currentFrame = !!frame && frame.assetId === assetId && frame.page === page && frame.zoom === zoom && frame.viewId === view?.viewId;
+  const ready = enabled && currentFrame && loaded === frame!.sequence;
   const errorHandler = useRef(onError); errorHandler.current = onError;
   useEffect(() => {
     sender.current = new InkGesture((command) => request(connection.control, 'viewer:ink', command), (message) => { if (connection.snapshot.status === 'connected') errorHandler.current(message); });
@@ -44,6 +45,10 @@ export function MarkerPad({ connection, assetId, page, zoom, enabled, color, wid
       const parsed = previewFrameSchema.safeParse(raw);
       if (!parsed.success || bytes.byteLength > MAX_PREVIEW_BYTES) { ack({ ok: false }); return; }
       const meta = parsed.data;
+      const { viewer, previewView } = connection.snapshot;
+      // The control channel can invalidate a frame while its binary image is
+      // still traveling. Do not let that image bring erased ink or an old file back.
+      if (meta.assetId !== viewer.assetId || meta.page !== viewer.page || meta.zoom !== viewer.zoom || meta.viewId !== previewView?.viewId) { ack({ ok: false }); return; }
       if (meta.sequence <= sequence.current) { ack({ ok: true }); return; }
       sequence.current = meta.sequence;
       const next = URL.createObjectURL(new Blob([bytes], { type: 'image/jpeg' }));
@@ -88,7 +93,7 @@ export function MarkerPad({ connection, assetId, page, zoom, enabled, color, wid
         const samples = event.nativeEvent.getCoalescedEvents?.();
         for (const sample of samples?.length ? samples : [event.nativeEvent]) { const position = point(sample, event.currentTarget); preview(position); sender.current?.move(position); }
       }} onPointerUp={stop} onPointerCancel={stop} onLostPointerCapture={stop}>
-      {frame && frame.assetId === assetId && <img className="marker-preview" src={frame.url} alt={`Vista de ${connection.snapshot.viewer.name}, página ${frame.page}`} draggable={false} data-page={frame.page} data-view={frame.viewId} onLoad={() => setLoaded(frame.sequence)} />}
+      {currentFrame && <img className="marker-preview" src={frame!.url} alt={`Vista de ${connection.snapshot.viewer.name}, página ${frame!.page}`} draggable={false} data-page={frame!.page} data-view={frame!.viewId} onLoad={() => { if (url.current === frame!.url) setLoaded(frame!.sequence); }} onError={() => { if (url.current === frame!.url) { setLoaded(0); connection.watchPreview(true); } }} />}
       <canvas ref={canvas} width={frame?.width || 800} height={frame?.height || 480} aria-hidden="true" />
       {!ready && <span role="status">{enabled ? 'Actualizando la vista del PC…' : 'Esperando la pantalla…'}</span>}
     </div>
