@@ -36,6 +36,24 @@ describe('ephemeral drawing contracts and coordinates', () => {
     await new Promise((resolve) => setImmediate(resolve));
     expect(send).toHaveBeenCalledTimes(1); expect(onError).not.toHaveBeenCalled();
   });
+  it('starts drawing on a new file without waiting for acknowledgements from cancelled batches', async () => {
+    const commands: InkCommand[] = [], releases: (() => void)[] = [];
+    const onError = vi.fn();
+    const gesture = new InkGesture((command) => {
+      commands.push(command);
+      return command.assetId === 'old' ? new Promise<void>((resolve) => releases.push(resolve)) : Promise.resolve();
+    }, onError);
+    gesture.begin('old', 1, 'blue', 0.006, { x: 0, y: 0 });
+    for (let index = 0; index < 128; index++) gesture.move({ x: index / 128, y: 0.5 });
+    gesture.end(); await new Promise((resolve) => setImmediate(resolve));
+    releases.shift()!(); await new Promise((resolve) => setImmediate(resolve));
+    expect(commands.filter((command) => command.type === 'points')).toHaveLength(4);
+    gesture.cancel(); gesture.begin('new', 1, 'coral', 0.006, { x: 0.25, y: 0.5 }); gesture.move({ x: 0.5, y: 0.5 }); gesture.end();
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(commands.filter((command) => command.assetId === 'new').map((command) => command.type)).toEqual(['begin', 'points', 'end']);
+    for (const release of releases.splice(0)) release();
+    await new Promise((resolve) => setImmediate(resolve)); expect(onError).not.toHaveBeenCalled();
+  });
   it('rejects nonfinite points, oversized batches, arbitrary colors and stale page values', () => {
     expect(inkSchema.safeParse(begin()).success).toBe(true);
     expect(inkSchema.safeParse({ ...begin(), point: { x: NaN, y: 0 } }).success).toBe(false);

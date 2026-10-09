@@ -60,7 +60,9 @@ test('returning online restarts a stalled handshake and permits the next file', 
   await expect.poll(() => network.offlineAttempts).toBeGreaterThan(0);
   await network.reconnect();
   await phone.evaluate(() => window.dispatchEvent(new Event('online')));
-  await expect(phone.getByText('Celular conectado', { exact: true })).toBeVisible({ timeout: 6000 });
+  // Include the stale-transport probe and internet round trips, while staying
+  // below the 20-second stalled handshake/reservation this regression exposes.
+  await expect(phone.getByText('Celular conectado', { exact: true })).toBeVisible({ timeout: 10000 });
   await upload(phone, 'despues-del-corte.pdf', 'application/pdf', pdfFixture());
   await expect(phone.getByRole('button', { name: 'Página siguiente' })).toBeEnabled();
   await host.close(); await phone.close();

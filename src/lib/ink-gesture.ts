@@ -11,6 +11,7 @@ export class InkGesture {
   private pending = new Set<Gesture>();
   private queued = 0;
   private inFlight = 0;
+  private epoch = 0;
   private packets: { gesture: Gesture; command: InkCommand }[] = [];
   constructor(private send: (command: InkCommand) => Promise<unknown>, private onError: (message: string) => void) {}
   private enqueue(gesture: Gesture, command: InkCommand) {
@@ -31,6 +32,7 @@ export class InkGesture {
       if (gesture.failed) { this.packets.shift(); this.completed(gesture); continue; }
       if (command.type !== 'begin' && !gesture.started) break;
       this.packets.shift(); this.inFlight++;
+      const epoch = this.epoch;
       void Promise.resolve().then(async () => {
         if (gesture.failed) return;
         await this.send(command);
@@ -38,7 +40,7 @@ export class InkGesture {
       }).catch((error: Error) => {
         const cancelled = gesture.failed; gesture.failed = true;
         if (!cancelled) this.onError(error.message || 'No se pudo dibujar. Vuelve a intentarlo.');
-      }).finally(() => { this.completed(gesture); this.inFlight--; this.pump(); });
+      }).finally(() => { this.completed(gesture); if (epoch === this.epoch) this.inFlight--; this.pump(); });
     }
   }
   begin(assetId: string, page: number, color: InkColor, width: InkWidth, point: InkPoint, viewId?: string) {
@@ -73,6 +75,9 @@ export class InkGesture {
     for (const gesture of this.pending) gesture.failed = true;
     this.pending.clear();
     this.active = undefined; clearTimeout(this.timer); this.timer = undefined;
+    // Retired ACKs still settle their bounded queue entries, but must neither
+    // occupy the new file's send slots nor decrement its active packet count.
+    this.epoch++; this.inFlight = 0;
     this.pump();
   }
 }

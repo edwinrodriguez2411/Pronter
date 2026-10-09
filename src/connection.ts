@@ -66,6 +66,7 @@ export class Connection {
     this.control.on('viewer:state', (viewer: ViewerState) => this.patch({ viewer }));
     this.control.on('display:state', (display: DisplayState) => this.patch({ display }));
     this.control.on('preview:view', (previewView: PreviewView) => this.patch({ previewView }));
+    this.control.on('pair:probe', (ack: (reply: { ok: boolean }) => void) => { if (typeof ack === 'function') ack({ ok: true }); });
     this.control.on('pair:ended', (reason: string) => this.finish(reason));
     document.addEventListener('visibilitychange', this.wake);
     window.addEventListener('pageshow', this.wake);

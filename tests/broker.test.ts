@@ -10,6 +10,7 @@ let sockets: Socket[];
 async function socket(namespace: string, auth?: Credentials) {
   const client = io(`${url}/${namespace}`, { transports: ['websocket'], forceNew: true, autoConnect: false, reconnection: false, auth });
   sockets.push(client);
+  client.on('pair:probe', (ack) => ack({ ok: true }));
   await new Promise<void>((resolve, reject) => { client.once('connect', resolve); client.once('connect_error', reject); client.connect(); });
   return client;
 }
@@ -98,6 +99,22 @@ describe('volatile pairing broker', () => {
     controller.disconnect();
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect((await call(other, 'pair:resume', controllerInfo)).ok).toBe(true);
+  });
+  it('recovers a stale transport with the original key while rejecting other phones and concurrent takeovers', async () => {
+    const { host, controller, controllerInfo, hostInfo } = await pair();
+    controller.removeAllListeners('pair:probe');
+    const replacement = await socket('control'), other = await socket('control');
+    expect((await call(other, 'pair:join', hostInfo.token)).code).toBe('OCCUPIED');
+    expect((await call(other, 'pair:resume', { ...controllerInfo, key: 'forged' })).code).toBe('EXPIRED');
+    const oldDisconnected = event(controller, 'disconnect');
+    const recovered = call(replacement, 'pair:resume', controllerInfo);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect((await call(other, 'pair:resume', controllerInfo)).code).toBe('OCCUPIED');
+    expect((await recovered).ok).toBe(true); await oldDisconnected;
+    expect(controller.connected).toBe(false); expect(broker.pairCount).toBe(1);
+    expect((await call(other, 'pair:join', hostInfo.token)).code).toBe('OCCUPIED');
+    expect((await call(replacement, 'pair:ready')).ok).toBe(true);
+    expect(host.connected).toBe(true);
   });
   it('keeps the first controller reserved while choosing a file beyond normal disconnect grace', async () => {
     const { host, controller, hostInfo, controllerInfo } = await pair();

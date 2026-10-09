@@ -9,6 +9,7 @@ interface Pair {
   host?: Socket; controller?: Socket; hostData?: Socket; controllerData?: Socket;
   hostTimer?: ReturnType<typeof setTimeout>; controllerTimer?: ReturnType<typeof setTimeout>;
   pickerUntil?: number; hostReconnectUntil?: number; controllerReconnectUntil?: number;
+  recovery?: Socket;
   transfer?: Transfer; state: ViewerState; commands: Set<string>;
 }
 const key = () => randomBytes(32).toString('base64url');
@@ -107,18 +108,30 @@ export function createBroker(httpServer: HttpServer, { graceMs = 20000, pickerGr
       socket.emit('viewer:state', pair.state);
       status(pair);
     });
-    socket.on('pair:resume', (credentials: Credentials, ack: Ack) => {
+    socket.on('pair:resume', async (credentials: Credentials, ack: Ack) => {
       const pair = credentials && pairs.get(credentials.id);
       const role = credentials?.role;
       if (!pair || !['host', 'controller'].includes(role) || typeof credentials.key !== 'string' || credentials.key !== (role === 'host' ? pair.hostKey : pair.controllerKey)) return fail(ack, 'EXPIRED', 'La asociación terminó. Escanea el nuevo QR.');
       const existing = role === 'host' ? pair.host : pair.controller;
       if (socket.data.pairId && existing !== socket) return fail(ack, 'ALREADY_BOUND', 'Esta conexión ya está asociada.');
+      if (pair.recovery) return fail(ack, 'OCCUPIED', 'Se está recuperando la conexión anterior.');
       if (existing?.connected && existing !== socket) {
-        if (role !== 'controller' || !pair.pickerUntil || pair.pickerUntil <= Date.now()) return fail(ack, 'OCCUPIED', 'Este dispositivo ya tiene una conexión activa.');
-        // A frozen picker can leave a stale transport alive. Only the private controller
-        // credential may replace it during the bounded picker reservation.
+        const picker = role === 'controller' && !!pair.pickerUntil && pair.pickerUntil > Date.now();
+        if (!picker) {
+          // A proxy can keep the old server-side WebSocket open after the device
+          // loses it. Probe it before refusing recovery by the same private key.
+          pair.recovery = socket;
+          const responsive = await new Promise<boolean>((resolve) => existing.timeout(1500).emit('pair:probe', (error: Error | null, reply: { ok: boolean }) => resolve(!error && reply?.ok === true)));
+          if (pair.recovery === socket) pair.recovery = undefined;
+          if (!socket.connected) return;
+          if (pairs.get(pair.id) !== pair) return fail(ack, 'EXPIRED', 'La asociación terminó. Escanea el nuevo QR.');
+          if (responsive || (role === 'host' ? pair.host : pair.controller) !== existing && (role === 'host' ? pair.host : pair.controller) !== undefined) return fail(ack, 'OCCUPIED', 'Este dispositivo ya tiene una conexión activa.');
+        }
+        // Invalid keys never reach this branch. Exactly one replacement is bound
+        // before retiring the old socket, preserving QR admission exclusivity.
         cancel(pair, 'Se está recuperando el canal de archivos.');
-        const oldData = pair.controllerData; pair.controllerData = undefined;
+        const oldData = role === 'host' ? pair.hostData : pair.controllerData;
+        if (role === 'host') pair.hostData = undefined; else pair.controllerData = undefined;
         oldData?.disconnect(true);
       }
       bind(socket, pair, role);

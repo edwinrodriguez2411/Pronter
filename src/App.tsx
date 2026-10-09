@@ -346,8 +346,11 @@ function ControlPage() {
   const editInk = (type: 'undo' | 'clear') => {
     if (!controlsReady || viewPendingRef.current || !state.assetId) return;
     const assetId = state.assetId;
+    const id = createId(); viewPendingRef.current = id; setViewPending(true);
     setError('');
-    void request(connection.control, 'viewer:ink', { id: createId(), assetId, page: state.page, type } satisfies InkCommand).catch((reason: Error) => { if (connection.snapshot.status === 'connected' && connection.snapshot.viewer.assetId === assetId) setError(reason.message); });
+    void request(connection.control, 'viewer:ink', { id, assetId, page: state.page, type } satisfies InkCommand)
+      .catch((reason: Error) => { if (connection.snapshot.status === 'connected' && connection.snapshot.viewer.assetId === assetId) setError(reason.message); })
+      .finally(() => { if (viewPendingRef.current === id) { viewPendingRef.current = null; setViewPending(false); } });
   };
   const leave = () => {
     cancel(); setRunning(false);
