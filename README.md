@@ -2,6 +2,8 @@
 
 Una SPA para presentar archivos del celular en otra pantalla. La pantalla muestra un QR; el primer celular que lo escanea toma el mando. Sin cuentas, base de datos, historial ni almacenamiento de archivos.
 
+**Disponible en [pronter.onrender.com](https://pronter.onrender.com).** Abre ese enlace en el computador y escanea su QR desde el celular. Incluye pantalla completa y un marcador para dibujar sobre la presentación desde ambos dispositivos.
+
 ## Ejecutar
 
 Necesitas Node.js 22.18 o superior.
@@ -41,13 +43,13 @@ docker build -t pronter .
 docker run --rm -p 5173:5173 -e PUBLIC_URL=https://tu-dominio.example pronter
 ```
 
-El proveedor o proxy que utilices termina HTTPS. Este proyecto todavía no está publicado en un dominio público.
+El proveedor o proxy que utilices termina HTTPS. La instancia pública de este proyecto utiliza Render Free.
 
 ### Opción gratuita: Render
 
 El archivo `render.yaml` define un único **Web Service** Node con `plan: free`, comprobación de salud y despliegues manuales. La app toma automáticamente el dominio HTTPS de `RENDER_EXTERNAL_URL`, así que el QR y la validación del origen de los sockets utilizan el dominio público. Para un dominio propio, configura `PUBLIC_URL`.
 
-Para publicarlo, sube el proyecto a un repositorio privado de GitHub, conecta ese repositorio a Render y crea un Blueprint desde `render.yaml`. Mantén el espacio de trabajo en **Hobby**, el servicio en **Free** y sin método de pago. Si lo creas manualmente, usa `npm ci --include=dev && npm run build` como comando de compilación, `npm start` para iniciarlo y `/api/health` como comprobación de salud. No agregues bases de datos ni discos.
+Para publicar otra instancia, sube el proyecto a un repositorio de GitHub, conecta ese repositorio a Render y crea un Blueprint desde `render.yaml`. Mantén el espacio de trabajo en **Hobby**, el servicio en **Free** y sin método de pago. Si lo creas manualmente, usa `npm ci --include=dev && npm run build` como comando de compilación, `npm start` para iniciarlo y `/api/health` como comprobación de salud. No agregues bases de datos ni discos.
 
 Condiciones consultadas el 9 de octubre de 2026: 750 horas de instancia gratuita por espacio de trabajo al mes; el servicio se suspende después de 15 minutos sin tráfico y puede tardar aproximadamente un minuto en arrancar al volver a abrirlo. Hobby incluye **5 GB de salida al mes**, compartidos por los servicios del espacio de trabajo: archivos retransmitidos y recursos de los visores consumen ese cupo. Sin método de pago, al agotarlo se suspenden los servicios gratuitos hasta el siguiente mes; al agotar los minutos de compilación se deshabilitan las nuevas compilaciones. Con un método de pago agregado, puede haber cargos por consumo adicional. [Condiciones gratuitas](https://render.com/docs/free), [ancho de banda](https://render.com/docs/outbound-bandwidth), [variables de entorno](https://render.com/docs/environment-variables).
 
@@ -64,6 +66,8 @@ El plan gratuito permite uso ocasional y pruebas; no garantiza disponibilidad co
 7. Pulsa **Salir** en el celular: el computador muestra «Sesión terminada», libera el contenido y los trazos y recarga después de dos segundos con otro QR.
 
 El segundo celular recibe un rechazo. Tras detectar una desconexión, la asociación queda reservada durante 20 segundos y se recupera únicamente con la credencial privada que mantiene en memoria el dispositivo original. Al abrir el selector de archivos desde el mando, la reserva del celular se amplía hasta 10 minutos para tolerar que el navegador quede suspendido mientras buscas el archivo. Al volver, el mando recupera la conexión automáticamente; el archivo elegido espera hasta 30 segundos a que ambos canales estén listos antes de enviarse. Una recarga del celular pierde la credencial. Si vence la reserva o pulsas **Salir**, se cierra la asociación y se renueva el QR.
+
+Mientras la pantalla confirma un cambio de página, zoom o desplazamiento, el mando espera antes de admitir otro control o un dibujo. Durante una desconexión se descartan los lotes de dibujo pendientes; al reconectar se conserva lo que la pantalla recibió y se eliminan los avisos de controles de la conexión anterior.
 
 Las pruebas locales por IP funcionan con HTTP, también para enviar archivos y usar los controles. Después de actualizar la aplicación o reiniciar el servidor, recarga la página del computador, cierra la pestaña anterior del celular y escanea el QR nuevo para cargar la misma versión en ambos dispositivos.
 
@@ -125,7 +129,7 @@ Los resultados y límites de la verificación realizada están en [VALIDATION.md
 Para verificar un despliegue público desde este computador, usa su URL en `PRONTER_E2E_URL`. Las pruebas abren dos navegadores independientes, comprueban que el QR apunta al mismo dominio y no arrancan otro servidor local. El escenario específico de HTTP en la red local se omite cuando el sitio utiliza HTTPS.
 
 ```powershell
-$env:PRONTER_E2E_URL = 'https://tu-servicio.onrender.com'
+$env:PRONTER_E2E_URL = 'https://pronter.onrender.com'
 npm run test:e2e
 Remove-Item Env:PRONTER_E2E_URL
 ```

@@ -277,6 +277,7 @@ function ControlPage() {
   const connected = snapshot.status === 'connected';
   const controlsReady = connected && !viewPending;
   const canSend = connected && snapshot.dataReady;
+  useEffect(() => { if (connected) setError(''); }, [connected]);
   useEffect(() => {
     const input = picker.current;
     const cancelled = () => connection.setFileSelection(false);

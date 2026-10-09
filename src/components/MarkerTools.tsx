@@ -28,7 +28,10 @@ export function MarkerPad({ connection, assetId, page, zoom, enabled, color, wid
   const errorHandler = useRef(onError); errorHandler.current = onError;
   useEffect(() => {
     sender.current = new InkGesture((command) => request(connection.control, 'viewer:ink', command), (message) => { if (connection.snapshot.status === 'connected') errorHandler.current(message); });
-    return () => sender.current?.cancel();
+    // Cancel at the connection event, before queued ACKs can continue a gesture
+    // on the recovered socket. React's visual update can happen later.
+    const unsubscribe = connection.subscribe(() => { if (connection.snapshot.status !== 'connected') sender.current?.cancel(); });
+    return () => { unsubscribe(); sender.current?.cancel(); };
   }, [connection]);
   const clearPreview = () => { const node = canvas.current; node?.getContext('2d')?.clearRect(0, 0, node.width, node.height); };
   useEffect(() => { sender.current?.cancel(); pointerId.current = undefined; last.current = undefined; clearPreview(); }, [assetId, page, zoom, enabled]);

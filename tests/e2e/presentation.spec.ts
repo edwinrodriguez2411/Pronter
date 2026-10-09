@@ -115,6 +115,8 @@ test('phone and PC drawing follows zoom, pan, resize, reconnect, replacement and
   await phone.getByRole('button', { name: 'Desplazar a la izquierda' }).click();
   await expect.poll(() => inkPixel(host, '.content-image img', 0.4, 0.35)).toEqual([36, 72, 232, 255]);
   await phone.getByRole('button', { name: 'Ajustar', exact: true }).click();
+  await expect(phone.locator('.marker-pad')).toHaveAttribute('aria-disabled', 'false');
+  await expect(phone.locator('.zoom-controls')).toContainText('100%');
   await host.setViewportSize({ width: 1024, height: 768 });
   await expect.poll(() => inkPixel(host, '.content-image img', 0.4, 0.35)).toEqual([36, 72, 232, 255]);
   await host.getByRole('button', { name: 'Dibujar en el PC', exact: true }).click();
@@ -132,7 +134,7 @@ test('phone and PC drawing follows zoom, pan, resize, reconnect, replacement and
   await drawOnPhone(phone); await expect(overlay).toHaveAttribute('data-strokes', '1');
   await network.disconnect(); await expect(phone.getByText(/Reconectando ·/)).toBeVisible();
   await network.reconnect(); await expect(phone.getByText('Celular conectado', { exact: true })).toBeVisible();
-  await expect(phone.locator('.controller-error')).toHaveCount(0);
+  await expect.poll(() => phone.locator('.controller-error').allTextContents()).toEqual([]);
   await expect(overlay).toHaveAttribute('data-strokes', '1');
   await phone.locator('input[type=file]').setInputFiles({ name: 'roto.pdf', mimeType: 'application/pdf', buffer: Buffer.from('not a pdf') });
   await expect(phone.locator('.controller-notice')).toContainText('no coincide');
