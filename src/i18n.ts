@@ -3,7 +3,7 @@ import { catalog, describeMessage, formatMessage, translateText, type Locale, ty
 import type { ViewerState } from '../shared/protocol';
 
 export const localeNames: Record<Locale, string> = { es: 'Español', en: 'English', pt: 'Português', fr: 'Français' };
-export function supportedLocale(value: string | null): Locale | undefined { const code = value?.toLowerCase().split('-')[0]; return code && code in localeNames ? code as Locale : undefined; }
+export function supportedLocale(value: string | null): Locale | undefined { const code = value?.toLowerCase().split('-')[0]; return code && Object.hasOwn(localeNames, code) ? code as Locale : undefined; }
 const initialLocale = () => {
   if (typeof window === 'undefined') return 'es' as Locale;
   return supportedLocale(new URL(location.href).searchParams.get('lang')) || navigator.languages.map(supportedLocale).find(Boolean) || 'es';

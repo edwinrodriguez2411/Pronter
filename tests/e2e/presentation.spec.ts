@@ -68,6 +68,10 @@ test('four languages and an accessible contextual tour preserve the paired conte
   await phone.getByRole('button', { name: catalog.help.fr, exact: true }).click();
   const rect = (await phone.getByRole('dialog').boundingBox())!; expect(rect.y).toBeGreaterThanOrEqual(0); expect(rect.y + rect.height).toBeLessThanOrEqual(375);
   await phone.keyboard.press('Escape');
+  await upload(phone, 'traduccion.md', 'text/markdown', Buffer.from('![](https://remote.example/picture.jpg)'));
+  await expect(host.locator('.missing-image')).toHaveText(catalog.externalImage.en);
+  await host.locator('.app-header select').selectOption('fr'); await expect(host.locator('.missing-image')).toHaveText(catalog.externalImage.fr);
+  await host.locator('.app-header select').selectOption('en');
   await phone.getByRole('button', { name: catalog.exit.fr, exact: true }).click();
   await expect(host.locator('.qr-paper > svg')).toBeVisible();
   const { default: jsQR } = await import('jsqr'), { PNG } = await import('pngjs'); const png = PNG.sync.read(await host.locator('.qr-paper').screenshot());
@@ -441,6 +445,9 @@ test('phone sees the file and synchronized ink, and controls fullscreen with an 
   await expect(host.locator('.app-header')).toBeHidden();
   await expect(host.getByRole('button', { name: 'Activar pantalla completa', exact: true })).toBeVisible();
   await expect(phone.getByText(/Para ocultar las barras del navegador/)).toBeVisible();
+  await host.getByRole('button', { name: 'Activar pantalla completa', exact: true }).click();
+  await expect(host.locator('.host-app')).toHaveClass(/is-expanded/);
+  await host.getByRole('button', { name: 'Cerrar aviso', exact: true }).click();
   await phone.getByRole('button', { name: 'Salir de pantalla completa del PC', exact: true }).click();
   await expect(host.locator('.app-header')).toBeVisible();
   await host.evaluate(() => { delete (document.documentElement as unknown as Record<string, unknown>).requestFullscreen; });
@@ -481,10 +488,19 @@ test('phone sees the file and synchronized ink, and controls fullscreen with an 
   await expect(host.locator('.host-app')).toHaveClass(/is-expanded/);
   await expect(pad).toHaveAttribute('aria-disabled', 'false');
   await expectPreviewColor(phone, 0.1, 0.1, [255, 117, 92]);
+  // A host gesture must wait for the preceding remote transition. Delay its
+  // layout callback so an old confirmation cannot overwrite a new native mode.
+  await host.evaluate(() => {
+    const raf = window.requestAnimationFrame;
+    (window as unknown as Record<string, () => void>).restoreDisplayFrame = () => { window.requestAnimationFrame = raf; };
+    window.requestAnimationFrame = (callback) => raf(time => { setTimeout(() => callback(time), 500); });
+  });
   await phone.getByRole('button', { name: 'Salir de pantalla completa del PC', exact: true }).click();
   await expect(host.locator('.host-app')).not.toHaveClass(/is-expanded/);
+  await expect(host.locator('.fullscreen-button')).toBeDisabled();
   // Exiting genuine native fullscreen also works from the phone.
   await host.getByRole('button', { name: 'Pantalla completa', exact: true }).click();
+  await host.evaluate(() => { ((window as unknown as Record<string, () => void>).restoreDisplayFrame)(); });
   await expect(phone.getByRole('button', { name: 'Salir de pantalla completa del PC', exact: true })).toBeVisible();
   await phone.getByRole('button', { name: 'Salir de pantalla completa del PC', exact: true }).click();
   await expect.poll(() => host.evaluate(() => document.fullscreenElement === null)).toBe(true);

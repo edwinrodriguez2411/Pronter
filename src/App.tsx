@@ -98,6 +98,8 @@ function HostPage() {
     const [isFullscreen, setFullscreen] = useState(!!document.fullscreenElement);
     const [expanded, setExpanded] = useState(false);
     const [needsClick, setNeedsClick] = useState(false);
+    const displayChanging = useRef(false);
+    const [displayBusy, setDisplayBusy] = useState(false);
     const [drawing, setDrawing] = useState(false);
     const [inkColor, setInkColor] = useState<InkColor>('coral');
     const [inkWidth, setInkWidth] = useState<InkWidth>(0.006);
@@ -119,9 +121,24 @@ function HostPage() {
         document.addEventListener('fullscreenchange', changed);
         return () => document.removeEventListener('fullscreenchange', changed);
     }, []);
-    useEffect(() => { connection.publishDisplay({ expanded, native: isFullscreen, needsClick }); }, [connection, expanded, isFullscreen, needsClick, snapshot.status]);
+    useEffect(() => { if (!displayChanging.current) connection.publishDisplay({ expanded, native: isFullscreen, needsClick }); }, [connection, expanded, isFullscreen, needsClick, snapshot.status]);
+    const localFullscreen = async () => {
+        if (displayChanging.current) return;
+        displayChanging.current = true; setDisplayBusy(true);
+        let completed = false;
+        try { await fullscreen(); completed = true; }
+        finally {
+            const native = !!document.fullscreenElement;
+            const nextExpanded = (native || !completed) && connection.snapshot.display.expanded;
+            setFullscreen(native); setNeedsClick(nextExpanded && !native); if (!native && completed) setExpanded(false);
+            connection.publishDisplay({ expanded: nextExpanded, native, needsClick: nextExpanded && !native });
+            displayChanging.current = false; setDisplayBusy(false); presenter.current?.refreshPreview();
+        }
+    };
     useEffect(() => {
         const remoteDisplay = async (value: boolean, ack: Ack) => {
+            if (displayChanging.current) return ack({ ok: false, error: 'La pantalla está cambiando de modo. Espera un momento.' });
+            displayChanging.current = true; setDisplayBusy(true);
             setExpanded(value);
             setNeedsClick(false);
             let native = !!document.fullscreenElement, requiresClick = false;
@@ -140,10 +157,13 @@ function HostPage() {
             }
             if (value && !native)
                 requiresClick = true;
-            setNeedsClick(requiresClick);
-            await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+            await new Promise<void>((resolve) => { const timer = setTimeout(resolve, 250); requestAnimationFrame(() => { clearTimeout(timer); resolve(); }); });
+            native = !!document.fullscreenElement;
+            requiresClick = value && !native;
+            setFullscreen(native); setNeedsClick(requiresClick);
             presenter.current?.refreshPreview();
             connection.publishDisplay({ expanded: value, native, needsClick: requiresClick });
+            displayChanging.current = false; setDisplayBusy(false);
             ack({ ok: true });
         };
         connection.control.on('display:command', remoteDisplay);
@@ -179,7 +199,7 @@ function HostPage() {
             if (event.key.toLowerCase() === 'f') {
                 event.preventDefault();
                 if (!event.repeat)
-                    void fullscreen().catch((reason: Error) => setError(reason.message));
+                    void localFullscreen().catch((reason: Error) => setError(reason.message));
                 return;
             }
             if (event.key === 'Escape' && !document.fullscreenElement) {
@@ -211,14 +231,14 @@ function HostPage() {
     if (snapshot.status === 'ended')
         return <div className="end-screen"><Brand /><AppTools /><div className="end-symbol"><CheckCheck size={56}/></div><h1>{t("Sesi\u00F3n terminada.")}</h1><p>{t("Un nuevo QR, un nuevo comienzo.")}</p><LoaderCircle className="spin" size={22}/></div>;
     return <div className={`host-app ${landing ? 'is-landing' : 'is-presenting'} ${isFullscreen ? 'is-fullscreen' : ''} ${expanded ? 'is-expanded' : ''}`}>
-    <header className="app-header"><Brand /><div className="header-right"><Status snapshot={snapshot}/><AppTools /><Button className="fullscreen-button" aria-label={isFullscreen ? t("Salir de pantalla completa") : t("Pantalla completa")} aria-pressed={isFullscreen} title={isFullscreen ? t("Salir de pantalla completa (F o Esc)") : t("Pantalla completa (F)")} onClick={() => { void fullscreen().catch((reason: Error) => setError(reason.message)); }}>{isFullscreen ? <Minimize size={19} aria-hidden="true"/> : <Maximize size={19} aria-hidden="true"/>}<span>{isFullscreen ? t("Salir de pantalla completa") : t("Pantalla completa")}</span></Button></div></header>
+    <header className="app-header"><Brand /><div className="header-right"><Status snapshot={snapshot}/><AppTools /><Button className="fullscreen-button" disabled={displayBusy} aria-label={isFullscreen ? t("Salir de pantalla completa") : t("Pantalla completa")} aria-pressed={isFullscreen} title={isFullscreen ? t("Salir de pantalla completa (F o Esc)") : t("Pantalla completa (F)")} onClick={() => { void localFullscreen().catch((reason: Error) => setError(reason.message)); }}>{isFullscreen ? <Minimize size={19} aria-hidden="true"/> : <Maximize size={19} aria-hidden="true"/>}<span>{isFullscreen ? t("Salir de pantalla completa") : t("Pantalla completa")}</span></Button></div></header>
     {landing && <Landing snapshot={snapshot}/>}
     {expanded && <div className="expanded-actions">
       <AppTools />
       {state.needsActivation && <Button onClick={() => { void presenter.current?.activate().catch((reason: Error) => setError(reason.message)); }}><Volume2 size={18}/>{t("Activar audio")}</Button>}
-      {needsClick && <div className="fullscreen-permission" role="status"><span>{t("El navegador necesita un clic aqu\u00ED para ocultar tambi\u00E9n sus barras.")}</span><Button onClick={() => { void fullscreen().catch((reason: Error) => setError(reason.message)); }}><Maximize size={18}/>{t("Activar pantalla completa")}</Button></div>}
-      <IconButton label={t("Salir de vista ampliada")} onClick={() => { setExpanded(false); setNeedsClick(false); if (document.fullscreenElement)
-            void document.exitFullscreen(); }}><Minimize size={19}/></IconButton>
+      {needsClick && <div className="fullscreen-permission" role="status"><span>{t("El navegador necesita un clic aqu\u00ED para ocultar tambi\u00E9n sus barras.")}</span><Button disabled={displayBusy} onClick={() => { void localFullscreen().catch((reason: Error) => setError(reason.message)); }}><Maximize size={18}/>{t("Activar pantalla completa")}</Button></div>}
+      <IconButton label={t("Salir de vista ampliada")} disabled={displayBusy} onClick={() => { setExpanded(false); setNeedsClick(false); if (document.fullscreenElement)
+            void localFullscreen().catch((reason: Error) => setError(reason.message)); }}><Minimize size={19}/></IconButton>
     </div>}
     <main className={`stage-shell ${landing ? 'is-hidden' : ''}`} aria-label={t("Pantalla de presentaci\u00F3n")}>
       <div className="stage-topline"><span>{displaySourceName(state) || t("Tu pantalla est\u00E1 lista")}</span><span>{state.capabilities.includes('pages') ? `${state.page} / ${state.pages}` : state.kind === 'video' || state.kind === 'audio' ? formatTime(state.currentTime) : ''}</span></div>

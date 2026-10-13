@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { linkRequestSchema, normalizeLink } from '../shared/links';
 import { catalog, describeMessage, formatMessage, translateText } from '../shared/messages';
+import { supportedLocale } from '../src/i18n';
 
 describe('external content and language contracts', () => {
   it('normalizes supported YouTube links and start positions without trusting supplied providers', () => {
@@ -21,6 +22,8 @@ describe('external content and language contracts', () => {
     expect(() => normalizeLink('https://youtu.be/invalid', 'link')).toThrow(/YouTube/);
   });
   it('provides all four languages and renders structured error messages and parameters', () => {
+    expect(supportedLocale('pt-BR')).toBe('pt');
+    expect(supportedLocale('constructor')).toBeUndefined(); expect(supportedLocale('__proto__')).toBeUndefined(); expect(supportedLocale('unknown')).toBeUndefined();
     for (const messages of Object.values(catalog)) for (const locale of ['es', 'en', 'pt', 'fr'] as const) expect(messages[locale].trim()).not.toBe('');
     expect(formatMessage(describeMessage('Elige un archivo no vacío de hasta 100 MB.'), 'en')).toContain('100 MB');
     expect(formatMessage(describeMessage('Reconectando · 12s'), 'fr')).toBe('Reconnexion · 12s');
