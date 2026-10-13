@@ -13,7 +13,7 @@ export async function validateSignature(blob: Blob, meta: FileMeta) {
 }
 
 export function checkConversionSize(bytes: number) {
-  if (bytes > MAX_CONVERSION_BYTES) throw new Error('Este archivo no se reproduce directamente y supera los 200 MB permitidos para conversión. Envíalo en MP4 (H.264/AAC) o MP3.');
+  if (bytes > MAX_CONVERSION_BYTES) throw new Error('Este archivo no se reproduce directamente y supera los 25 MB permitidos para conversión. Envíalo en MP4 (H.264/AAC) o MP3.');
 }
 
 // Check ZIP's central directory before decompression; ZIP bombs must not allocate their declared expansion.
@@ -35,7 +35,7 @@ export async function validatePowerpointZip(blob: Blob) {
     const compressed = directory.getUint32(cursor + 20, true);
     const size = directory.getUint32(cursor + 24, true);
     expanded += size;
-    if (size > 600_000_000 || expanded > 1_500_000_000 || (size > 10_000_000 && size / Math.max(1, compressed) > 300)) throw new Error('El PowerPoint requiere demasiada memoria al descomprimirse. Exporta una versión más ligera.');
+    if (size > 100_000_000 || expanded > 300_000_000 || (size > 10_000_000 && size / Math.max(1, compressed) > 300)) throw new Error('El PowerPoint requiere demasiada memoria al descomprimirse. Exporta una versión más ligera.');
     cursor += 46 + directory.getUint16(cursor + 28, true) + directory.getUint16(cursor + 30, true) + directory.getUint16(cursor + 32, true);
   }
 }

@@ -1,4 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
+import { linkRequestSchema, normalizeLink } from '../shared/links.js';
+import { describeMessage } from '../shared/messages.js';
 import type { Server as HttpServer } from 'node:http';
 import { Server, type Socket } from 'socket.io';
 import { ACK_TIMEOUT_MS, CHUNK_BYTES, TRANSFER_WINDOW, FILE_PICKER_GRACE_MS, MAX_PREVIEW_BYTES, commandSchema, displaySchema, emptyViewer, fileMetaSchema, inkSchema, kindFromName, pointerSchema, previewFrameSchema, previewViewSchema, viewerSchema, type Ack, type Credentials, type FileMeta, type Role, type ViewerState } from '../shared/protocol.js';
@@ -14,7 +16,7 @@ interface Pair {
 }
 const key = () => randomBytes(32).toString('base64url');
 const ok = (ack: unknown, data?: unknown) => { if (typeof ack === 'function') (ack as Ack)({ ok: true, data }); };
-const fail = (ack: unknown, code: string, error: string) => { if (typeof ack === 'function') (ack as Ack)({ ok: false, code, error }); };
+const fail = (ack: unknown, code: string, error: string) => { if (typeof ack === 'function') (ack as Ack)({ ok: false, code, error, message: describeMessage(error) }); };
 
 export function createBroker(httpServer: HttpServer, { graceMs = 20000, pickerGraceMs = FILE_PICKER_GRACE_MS, publicOrigin }: { graceMs?: number; pickerGraceMs?: number; publicOrigin?: string } = {}) {
   const io = new Server(httpServer, {
@@ -178,6 +180,18 @@ export function createBroker(httpServer: HttpServer, { graceMs = 20000, pickerGr
       const pair = forSocket(socket); const parsed = previewViewSchema.safeParse(raw);
       if (pair?.host === socket && parsed.success && parsed.data.assetId === pair.state.assetId) pair.controller?.emit('preview:view', parsed.data);
     });
+    socket.on('content:link', (raw: unknown, ack: Ack) => {
+      const pair = forSocket(socket);
+      if (!pair || pair.controller !== socket || !pair.host?.connected) return fail(ack, 'OFFLINE', 'La pantalla no está conectada.');
+      const parsed = linkRequestSchema.safeParse(raw);
+      if (!parsed.success) return fail(ack, 'INVALID_LINK', 'Escribe un enlace HTTP o HTTPS válido.');
+      let source;
+      try { source = normalizeLink(parsed.data.url, parsed.data.id, publicOrigin); }
+      catch (error) { return fail(ack, 'INVALID_LINK', (error as Error).message); }
+      cancel(pair, 'Se está mostrando un enlace nuevo.');
+      pair.host.emit('content:link', source);
+      ok(ack);
+    });
     socket.on('viewer:command', (raw: unknown, ack: Ack) => {
       const pair = forSocket(socket);
       if (!pair || pair.controller !== socket || !pair.host?.connected) return fail(ack, 'OFFLINE', 'La pantalla no está conectada.');
@@ -279,7 +293,7 @@ export function createBroker(httpServer: HttpServer, { graceMs = 20000, pickerGr
       const current = forSocket(socket);
       if (!current || current.controllerData !== socket || !current.controller?.connected || !current.hostData?.connected) return fail(ack, 'OFFLINE', 'La pantalla aún no está lista para recibir.');
       const parsed = fileMetaSchema.safeParse(raw);
-      if (!parsed.success || kindFromName(parsed.data.name) !== parsed.data.kind) return fail(ack, 'INVALID_FILE', 'Archivo vacío, formato incompatible o tamaño mayor de 1 GB.');
+      if (!parsed.success || kindFromName(parsed.data.name) !== parsed.data.kind) return fail(ack, 'INVALID_FILE', 'Archivo vacío, formato incompatible o tamaño mayor de 100 MB.');
       if (current.transfer) cancel(current, 'Se está enviando un archivo nuevo.');
       const transfer: Transfer = { meta: parsed.data, next: 0, bytes: 0, pending: 0, acknowledged: new Set() };
       current.transfer = transfer;

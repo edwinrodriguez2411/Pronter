@@ -1,6 +1,8 @@
 import type { Connection } from './connection';
-import { CHUNK_BYTES, emptyViewer, type Ack, type Command, type FileMeta, type InkColor, type InkCommand, type InkWidth, type PointerPosition, type ViewerState } from '../shared/protocol';
+import { CHUNK_BYTES, PREPARATION_TIMEOUT_MS, fileMetaSchema, emptyViewer, type Ack, type Command, type FileMeta, type LinkSource, type InkColor, type InkCommand, type InkWidth, type PointerPosition, type ViewerState } from '../shared/protocol';
 import { createViewer, type ViewerEngine } from './viewers/engine';
+import { createLinkViewer } from './viewers/links';
+import { describeMessage } from '../shared/messages';
 import { contentGeometry } from './lib/content-geometry';
 import { AnnotationLayer } from './viewers/annotation-layer';
 import { HostPreview } from './lib/host-preview';
@@ -15,6 +17,7 @@ export class Presenter {
   private receivedCommands = new Set<string>();
   private state = emptyViewer();
   private pendingId?: string;
+  private retainedNotice?: string;
   private destroyed = false;
   private ink: AnnotationLayer;
   private receivedInk = new Set<string>();
@@ -23,10 +26,11 @@ export class Presenter {
     this.ink = new AnnotationLayer(slot, () => this.publish({}), (notice) => this.publish({ notice }));
     this.preview = new HostPreview(connection, slot, () => this.state);
     this.removers.push(connection.onData('transfer:begin', (meta: FileMeta, ack: Ack) => {
+      if (!fileMetaSchema.safeParse(meta).success) return ack({ ok: false, error: 'Elige un archivo no vacío de hasta 100 MB.' });
       this.cancelPending();
       this.pendingId = meta.id;
       this.incoming = { meta, parts: [], bytes: 0, next: 0 };
-      this.publish({ phase: 'receiving', progress: 0, notice: '' });
+      this.publish({ phase: 'receiving', progress: 0, notice: '', failedLink: undefined, pendingId: meta.id, pendingName: meta.name });
       ack({ ok: true });
     }));
     this.removers.push(connection.onData('transfer:chunk', (id: string, index: number, bytes: ArrayBuffer, ack: Ack) => {
@@ -45,7 +49,7 @@ export class Presenter {
       void this.prepare(blob, transfer.meta);
     }));
     this.removers.push(connection.onData('transfer:cancel', ({ id, reason }: { id?: string; reason: string }) => {
-      if (!id || id === this.pendingId) { this.cancelPending(); this.publish({ phase: 'idle', progress: 0, notice: reason }); }
+      if (!id || id === this.pendingId) { this.cancelPending(); this.retainedNotice = reason; this.publish({ phase: 'idle', progress: 0, notice: reason, pendingId: undefined, pendingName: undefined }); }
     }));
     const commandHandler = (command: Command, ack: Ack) => {
       if (command.assetId !== this.state.assetId) return ack({ ok: false, error: 'El contenido cambió.' });
@@ -64,13 +68,18 @@ export class Presenter {
       pointer.style.opacity = '1';
       this.pointerTimer = setTimeout(() => { pointer.style.opacity = '0'; }, 600);
     };
-    const cancelHandler = (id: string) => { if (id === this.pendingId) { this.cancelPending(); this.publish({ phase: 'idle', progress: 0, notice: 'Envío cancelado.' }); } };
+    const cancelHandler = (id: string) => { if (id === this.pendingId) { this.cancelPending(); this.retainedNotice = 'Envío cancelado.'; this.publish({ phase: 'idle', progress: 0, notice: this.retainedNotice, pendingId: undefined, pendingName: undefined }); } };
     const connectHandler = () => setTimeout(() => { if (!this.destroyed) connection.publish({ ...this.state }); }, 150);
     const statusHandler = (status: string) => { if (status !== 'connected') { pointer.style.opacity = '0'; this.ink.finish(); } };
     const inkHandler = (command: InkCommand, ack: Ack) => {
       try { this.draw(command); ack({ ok: true }); }
       catch (error) { ack({ ok: false, error: (error as Error).message }); }
     };
+    const linkHandler = (source: LinkSource) => {
+      this.cancelPending(); this.pendingId = source.id;
+      void this.prepare(null, { id: source.id, name: new URL(source.url).hostname, size: 0, type: '', kind: source.provider === 'audio' ? 'audio' : 'video' }, source);
+    };
+    connection.control.on('content:link', linkHandler);
     connection.control.on('viewer:command', commandHandler);
     connection.control.on('viewer:pointer', pointerHandler);
     connection.control.on('asset:cancel', cancelHandler);
@@ -80,10 +89,12 @@ export class Presenter {
     this.removers.push(() => {
       connection.control.off('viewer:command', commandHandler); connection.control.off('viewer:pointer', pointerHandler); connection.control.off('asset:cancel', cancelHandler); connection.control.off('connect', connectHandler); connection.control.off('pair:status', statusHandler);
       connection.control.off('viewer:ink', inkHandler);
+      connection.control.off('content:link', linkHandler);
     });
   }
   private publish(values: Partial<ViewerState>) {
     Object.assign(this.state, values);
+    this.state.noticeMessage = this.state.notice ? describeMessage(this.state.notice) : undefined;
     this.ink.sync(this.state);
     this.state.inkCount = this.ink.count;
     this.slot.classList.toggle('is-black', this.state.black);
@@ -96,21 +107,28 @@ export class Presenter {
     this.pending?.abort(); this.pending = undefined;
     if (this.incoming) this.incoming.parts.length = 0;
     this.incoming = undefined; this.pendingId = undefined;
+    this.retainedNotice = undefined;
   }
-  private async prepare(blob: Blob, meta: FileMeta) {
+  private async prepare(blob: Blob | null, meta: FileMeta, source?: LinkSource) {
     const generation = this.generation;
     this.pending = new AbortController();
     const controller = this.pending;
+    const timeout = setTimeout(() => controller.abort(new DOMException('El archivo tardó demasiado en abrirse. Envía una versión más ligera.', 'TimeoutError')), PREPARATION_TIMEOUT_MS);
+    let stop!: () => void;
+    const aborted = new Promise<never>((_resolve, reject) => { stop = () => reject(controller.signal.reason); controller.signal.addEventListener('abort', stop, { once: true }); });
     const layer = document.createElement('div'); layer.className = 'viewer-layer is-candidate';
     this.slot.append(layer);
     let latest = emptyViewer();
     let committed = false;
-    this.publish({ phase: 'preparing', progress: 0 });
+    this.publish({ phase: 'preparing', progress: 0, notice: '', failedLink: undefined, pendingId: meta.id, pendingName: meta.name });
     try {
-      const engine = await createViewer(blob, meta, layer, controller.signal, (values) => {
+      const publish = (values: ViewerState) => {
         latest = values;
-        if (committed && !this.destroyed && this.engine?.state.assetId === meta.id) this.publish({ ...values, notice: this.state.notice || values.notice, phase: this.state.phase, progress: this.state.progress });
-      }, (phase, progress) => { if (generation === this.generation) this.publish({ phase, progress }); });
+        if (committed && !this.destroyed && this.engine?.state.assetId === meta.id) this.publish({ ...values, notice: this.retainedNotice || values.notice, failedLink: this.state.failedLink, pendingId: this.pendingId, pendingName: this.pendingId ? this.state.pendingName : undefined, phase: this.state.phase, progress: this.state.progress });
+      };
+      const preparing = source ? createLinkViewer(source, layer, controller.signal, publish) : createViewer(blob!, meta, layer, controller.signal, publish, (phase, progress) => { if (generation === this.generation && !this.destroyed) this.publish({ phase, progress }); });
+      void preparing.then((engine) => { if (controller.signal.aborted) engine.destroy(); }, () => {});
+      const engine = await Promise.race([preparing, aborted]);
       if (generation !== this.generation || this.destroyed) { engine.destroy(); return; }
       this.engine?.destroy(); this.engine = engine;
       layer.classList.remove('is-candidate');
@@ -121,8 +139,12 @@ export class Presenter {
       this.pointer.style.opacity = '0';
     } catch (error) {
       layer.remove();
-      if (generation === this.generation && !this.destroyed) this.publish({ phase: 'idle', progress: 0, notice: (error as Error).name === 'AbortError' ? '' : friendlyError(error) });
+      if (generation === this.generation && !this.destroyed) {
+        this.retainedNotice = (error as Error).name === 'AbortError' ? '' : friendlyError(error);
+        this.publish({ phase: 'idle', progress: 0, pendingId: undefined, pendingName: undefined, notice: this.retainedNotice, failedLink: (error as Error).name === 'AbortError' ? undefined : source });
+      }
     } finally {
+      clearTimeout(timeout); controller.signal.removeEventListener('abort', stop);
       if (this.pending === controller) { this.pending = undefined; this.pendingId = undefined; }
     }
   }

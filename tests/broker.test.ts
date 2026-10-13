@@ -33,6 +33,19 @@ beforeEach(async () => {
 afterEach(async () => { for (const client of sockets) client.disconnect(); await broker.close(); });
 
 describe('volatile pairing broker', () => {
+  it('accepts links only from the admitted phone and rejects oversized files before forwarding', async () => {
+    const { host, controller, hostInfo, controllerInfo } = await pair();
+    const other = await socket('control');
+    expect((await call(other, 'content:link', { id: 'link', url: 'https://youtu.be/M7lc1UVf-VE' })).code).toBe('OFFLINE');
+    expect((await call(controller, 'content:link', { id: 'link', url: 'javascript:alert(1)' })).code).toBe('INVALID_LINK');
+    const received = event(host, 'content:link');
+    expect((await call(controller, 'content:link', { id: 'link', url: 'https://youtu.be/M7lc1UVf-VE?t=10' })).ok).toBe(true);
+    expect(await received).toMatchObject({ provider: 'youtube', mediaId: 'M7lc1UVf-VE', start: 10 });
+    const receiver = await socket('transfer', hostInfo), sender = await socket('transfer', controllerInfo);
+    let begin = 0; receiver.on('transfer:begin', () => begin++);
+    const reply = await call(sender, 'transfer:begin', { id: 'large', name: 'large.mp4', size: MAX_FILE_BYTES + 1, type: 'video/mp4', kind: 'video' });
+    expect(reply.code).toBe('INVALID_FILE'); expect(reply.message?.code).toBe('fileMax'); expect(begin).toBe(0);
+  });
   it('permits only the admitted phone to control the host display before a file is loaded', async () => {
     const { host, controller } = await pair();
     host.on('display:command', (value, ack) => { expect(value).toBe(true); ack({ ok: true }); });
@@ -210,7 +223,7 @@ describe('volatile pairing broker', () => {
     const { controllerInfo } = await pair();
     await expect(socket('transfer', { ...controllerInfo, key: 'forged' })).rejects.toThrow();
   });
-  it('streams 1 GB through bounded windows without retaining a complete file', async () => {
+  it('streams 100 MB through bounded windows without retaining a complete file', async () => {
     const { hostInfo, controllerInfo } = await pair();
     const receiver = await socket('transfer', hostInfo); const sender = await socket('transfer', controllerInfo);
     let count = 0;

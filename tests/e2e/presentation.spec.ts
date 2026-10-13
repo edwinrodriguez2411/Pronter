@@ -1,6 +1,9 @@
 import { test, expect, type Page, type WebSocketRoute } from '@playwright/test';
 import { pdfFixture, pptxFixture, svgFixture, wavFixture } from '../fixtures';
 import { readFileSync, existsSync } from 'node:fs';
+import { mkdirSync, openSync, closeSync, ftruncateSync, writeSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { catalog, type Locale } from '../../shared/messages';
 
 async function associate(host: Page, phone: Page, phoneOrigin = '') {
   await host.goto('/');
@@ -30,6 +33,181 @@ async function upload(phone: Page, name: string, mimeType: string, buffer: Buffe
   await phone.locator('input[type=file]').setInputFiles({ name, mimeType, buffer });
   await expect(phone.locator('.current-file strong')).toHaveText(name);
 }
+
+test('four languages and an accessible contextual tour preserve the paired content', async ({ browser }) => {
+  const host = await browser.newPage(); const phone = await browser.newPage({ viewport: { width: 320, height: 812 }, isMobile: true, hasTouch: true });
+  await associate(host, phone); await upload(phone, 'idiomas.svg', 'image/svg+xml', svgFixture());
+  const original = await host.locator('.content-image img').getAttribute('src');
+  for (const locale of ['es', 'en', 'pt', 'fr'] as Locale[]) {
+    await phone.locator('.controller-header select').selectOption(locale);
+    await expect(phone.locator('html')).toHaveAttribute('lang', locale === 'pt' ? 'pt-BR' : locale);
+    await expect(phone.locator('.upload-button')).toBeEnabled(); await expect(phone.locator('.upload-button strong')).toHaveText(catalog.anotherFile[locale]);
+    await phone.locator('input[type=file]').setInputFiles({ name: 'invalid.exe', mimeType: 'application/octet-stream', buffer: Buffer.from('bad') });
+    await expect(phone.getByRole('alert')).toContainText(catalog.fileFormat[locale]);
+    await phone.getByRole('button', { name: catalog.help[locale], exact: true }).click();
+    const guide = phone.getByRole('dialog'); await expect(guide).toBeVisible();
+    await guide.getByRole('combobox', { name: catalog.guideIndex[locale] }).selectOption('7');
+    await expect(guide.locator('h2')).toHaveText(catalog.guideMarker[locale]);
+    await expect(guide).toContainText(catalog.guideUnavailable[locale]);
+    await phone.keyboard.press('Escape'); await expect(guide).toHaveCount(0);
+    await expect(phone.getByRole('button', { name: catalog.help[locale], exact: true })).toBeFocused();
+    expect(await phone.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await expect(host.locator('.content-image img')).toHaveAttribute('src', original!);
+  }
+  await phone.getByRole('button', { name: catalog.help.fr, exact: true }).click();
+  await phone.getByRole('dialog').getByRole('combobox', { name: catalog.guideIndex.fr }).selectOption('2');
+  await expect(phone.locator('.link-panel input')).toHaveClass(/guide-target/);
+  const target = (await phone.locator('.link-panel input').boundingBox())!, panel = (await phone.getByRole('dialog').boundingBox())!;
+  expect(target.y).toBeGreaterThanOrEqual(0); expect(target.y + target.height).toBeLessThan(panel.y);
+  await phone.screenshot({ path: '.cache/pronter-guide-fr.png' });
+  await phone.keyboard.press('Escape');
+  await host.locator('.app-header select').selectOption('en');
+  await expect(host.getByText('Phone connected', { exact: true })).toBeVisible();
+  await expect(phone.getByText('Téléphone connecté', { exact: true })).toBeVisible();
+  await phone.setViewportSize({ width: 812, height: 375 });
+  await phone.getByRole('button', { name: catalog.help.fr, exact: true }).click();
+  const rect = (await phone.getByRole('dialog').boundingBox())!; expect(rect.y).toBeGreaterThanOrEqual(0); expect(rect.y + rect.height).toBeLessThanOrEqual(375);
+  await phone.keyboard.press('Escape');
+  await phone.getByRole('button', { name: catalog.exit.fr, exact: true }).click();
+  await expect(host.locator('.qr-paper > svg')).toBeVisible();
+  const { default: jsQR } = await import('jsqr'), { PNG } = await import('pngjs'); const png = PNG.sync.read(await host.locator('.qr-paper').screenshot());
+  const qr = new URL(jsQR(new Uint8ClampedArray(png.data), png.width, png.height)!.data); expect(qr.searchParams.get('lang')).toBe('en');
+  const second = await browser.newPage(); await second.goto(qr.pathname + qr.search + qr.hash);
+  await expect(second.getByText('Phone connected', { exact: true })).toBeVisible(); expect(new URL(second.url()).searchParams.get('lang')).toBe('en');
+  await second.getByRole('button', { name: 'Exit', exact: true }).click();
+  await host.close(); await phone.close(); await second.close();
+});
+
+test('oversized native files are rejected before reading and a valid 100 MB video stays responsive', async ({ browser }) => {
+  test.setTimeout(180000); mkdirSync('.cache', { recursive: true });
+  const tooLarge = resolve('.cache/oversized-300.mp4'); const fd = openSync(tooLarge, 'w'); ftruncateSync(fd, 300_000_000); closeSync(fd);
+  const nearLimit = resolve('.cache/near-limit-100.mp4'), sample = readFileSync('tests/fixtures/sample.mp4');
+  const large = openSync(nearLimit, 'w'); writeSync(large, sample); const box = Buffer.alloc(8); box.writeUInt32BE(100_000_000 - sample.length); box.write('free', 4); writeSync(large, box); ftruncateSync(large, 100_000_000); closeSync(large);
+  const host = await browser.newPage(); const phone = await browser.newPage();
+  await associate(host, phone); await upload(phone, 'anterior.svg', 'image/svg+xml', svgFixture());
+  await phone.locator('.controller-header select').selectOption('en');
+  await phone.evaluate(() => { const slice = File.prototype.slice; (window as unknown as Record<string, number>).oversizeReads = 0; File.prototype.slice = function (...args) { if (this.name === 'oversized-300.mp4') { (window as unknown as Record<string, number>).oversizeReads++; } return slice.apply(this, args); }; });
+  await phone.locator('input[type=file]').setInputFiles(tooLarge);
+  await expect(phone.getByRole('alert')).toContainText('100 MB');
+  expect(await phone.evaluate(() => (window as unknown as Record<string, number>).oversizeReads)).toBe(0);
+  await expect(phone.locator('.current-file strong')).toHaveText('anterior.svg');
+  await phone.locator('input[type=file]').setInputFiles(nearLimit);
+  await expect(phone.getByRole('button', { name: 'How to use', exact: true })).toBeEnabled();
+  await expect(phone.locator('.current-file strong')).toHaveText('near-limit-100.mp4', { timeout: 120000 });
+  await expect(host.locator('video')).toBeVisible();
+  await host.getByRole('button', { name: 'Activar audio' }).click();
+  await expect(phone.getByRole('button', { name: 'Pause', exact: true })).toBeVisible();
+  await phone.getByRole('button', { name: 'Pause', exact: true }).click();
+  await phone.locator('.controller-header select').selectOption('es');
+  await upload(phone, 'despues.svg', 'image/svg+xml', svgFixture());
+  await expect(host.locator('.viewer-layer')).toHaveCount(1); await expect(host.locator('video')).toHaveCount(0);
+  await phone.getByRole('button', { name: 'Salir', exact: true }).click(); await host.close(); await phone.close();
+});
+
+test('YouTube and Vimeo adapters relay media controls and web links offer an honest external fallback', async ({ browser }) => {
+  test.setTimeout(90000);
+  const host = await browser.newPage(), phone = await browser.newPage();
+  const frameHtml = '<!doctype html><p id="state">paused</p><script>addEventListener("message",e=>{if(typeof e.data==="string")document.getElementById("state").textContent=e.data});</script>';
+  await host.route('https://www.youtube-nocookie.com/embed/**', route => route.fulfill({ contentType: 'text/html', body: frameHtml }));
+  await host.route('https://www.youtube.com/iframe_api', route => route.fulfill({ contentType: 'application/javascript', body: `window.YT={Player:class {constructor(el,o){this.el=el;this.time=0;this.volume=100;this.rate=1;this.state=2;el.addEventListener('load',()=>o.events.onReady());}playVideo(){this.state=1;this.el.contentWindow.postMessage('playing','*');}pauseVideo(){this.state=2;this.el.contentWindow.postMessage('paused','*');}getCurrentTime(){return this.time;}getDuration(){return 60;}getVolume(){return this.volume;}getPlaybackRate(){return this.rate;}getAvailablePlaybackRates(){return [0.5,1,1.5,2];}getPlayerState(){return this.state;}setVolume(v){this.volume=v;}seekTo(t){this.time=t;}setPlaybackRate(r){this.rate=r;}destroy(){this.el.remove();}}};window.onYouTubeIframeAPIReady();` }));
+  await host.route('https://player.vimeo.com/video/**', route => route.fulfill({ contentType: 'text/html', body: `<!doctype html><p id="state">paused</p><script>let s={getDuration:60,getCurrentTime:0,getPaused:true,getVolume:1,getPlaybackRate:1};addEventListener('message',e=>{let d=typeof e.data==='string'?JSON.parse(e.data):e.data;if(!d.method)return;if(d.method==='play'){s.getPaused=false;document.getElementById('state').textContent='playing';}if(d.method==='pause'){s.getPaused=true;document.getElementById('state').textContent='paused';}if(d.method==='setCurrentTime')s.getCurrentTime=d.value;if(d.method==='setVolume')s.getVolume=d.value;if(d.method==='setPlaybackRate')s.getPlaybackRate=d.value;e.source.postMessage({method:d.method,value:s[d.method]??d.value??true},e.origin)});parent.postMessage({event:'ready'},'*');</script>` }));
+  await host.context().route('https://blocked.example/**', route => route.fulfill({ contentType: 'text/html', headers: { 'X-Frame-Options': 'DENY' }, body: '<h1>Blocked embed</h1>' }));
+  await associate(host, phone);
+  const sendLink = async (url: string) => { await phone.getByLabel('Enlace para mostrar').fill(url); await phone.getByRole('button', { name: 'Mostrar enlace', exact: true }).click(); await expect(phone.locator('.current-file strong')).toContainText(url.includes('youtu.be') ? 'YouTube' : url.includes('vimeo.com') ? 'Vimeo' : 'blocked.example'); await expect(phone.locator('.source-progress')).toHaveCount(0); };
+  for (const url of ['https://youtu.be/M7lc1UVf-VE', 'https://vimeo.com/76979871']) {
+    await sendLink(url); await expect(phone.locator('.media-controls')).toBeVisible();
+    await phone.getByRole('button', { name: 'Reproducir', exact: true }).click();
+    await expect(host.frameLocator('.content-link iframe').locator('#state')).toHaveText('playing');
+    await phone.getByRole('button', { name: 'Pausar', exact: true }).click();
+    await expect(host.frameLocator('.content-link iframe').locator('#state')).toHaveText('paused');
+    await phone.getByLabel('Velocidad de reproducción').selectOption('1.5');
+    await expect(phone.getByLabel('Velocidad de reproducción')).toHaveValue('1.5');
+    await expect(phone.locator('.marker-pad')).toHaveCount(0);
+  }
+  await host.frameLocator('.content-link iframe').locator('body').evaluate(() => parent.postMessage({ event: 'error', data: { method: 'play', name: 'PrivacyError', message: 'Playback denied' } }, '*'));
+  await expect(phone.locator('.media-controls')).toHaveCount(0);
+  await expect(phone.getByRole('status').filter({ hasText: 'no permite incrustarse' })).toBeVisible();
+  await sendLink('https://blocked.example/page'); await expect(phone.locator('.media-controls')).toHaveCount(0);
+  await expect(phone.locator('.external-actions')).toContainText('Pronter no controla esa pestaña');
+  const popup = host.waitForEvent('popup'); await host.getByRole('link', { name: 'Abrir fuera', exact: true }).click(); const external = await popup; await expect(external.locator('h1')).toHaveText('Blocked embed'); await external.close();
+  await upload(phone, 'volver.svg', 'image/svg+xml', svgFixture()); await expect(host.locator('.content-link iframe')).toHaveCount(0);
+  await expect(phone.locator('.external-actions')).toHaveCount(0); await phone.getByRole('button', { name: 'Salir', exact: true }).click(); await host.close(); await phone.close();
+});
+
+test('direct media links can be controlled and cancelling a stalled link preserves the playing file', async ({ browser }) => {
+  const host = await browser.newPage(), phone = await browser.newPage();
+  await host.route('https://media.example/sample.mp4', route => route.fulfill({ contentType: 'video/mp4', body: readFileSync('tests/fixtures/sample.mp4') }));
+  await host.route('https://media.example/stall.mp4', () => {});
+  await associate(host, phone);
+  await upload(phone, 'mantener.mp4', 'video/mp4', readFileSync('tests/fixtures/sample.mp4'));
+  await host.getByRole('button', { name: 'Activar audio' }).click();
+  await expect(phone.getByRole('button', { name: 'Pausar', exact: true })).toBeVisible();
+  await phone.getByLabel('Enlace para mostrar').fill('https://media.example/stall.mp4');
+  await phone.getByRole('button', { name: 'Mostrar enlace', exact: true }).click();
+  await expect(phone.locator('.source-progress')).toBeVisible();
+  await expect(phone.locator('.source-progress')).toContainText('media.example');
+  await phone.locator('.source-progress').getByRole('button', { name: 'Cancelar envío', exact: true }).click();
+  await expect(phone.locator('.source-progress')).toHaveCount(0);
+  await expect(phone.locator('.current-file strong')).toHaveText('mantener.mp4');
+  await expect(host.locator('.viewer-layer')).toHaveCount(1);
+  await expect(phone.locator('.media-controls button').first()).toBeEnabled();
+  await phone.getByLabel('Enlace para mostrar').fill('https://media.example/sample.mp4');
+  await phone.getByRole('button', { name: 'Mostrar enlace', exact: true }).click();
+  await expect(phone.locator('.current-file strong')).toHaveText('Video · media.example');
+  await expect(host.locator('video')).toHaveCount(1);
+  await host.getByRole('button', { name: 'Activar audio' }).click();
+  await expect(phone.getByRole('button', { name: 'Pausar', exact: true })).toBeVisible();
+  await phone.getByRole('button', { name: 'Pausar', exact: true }).click();
+  await expect.poll(() => host.locator('video').evaluate((video: HTMLVideoElement) => video.paused)).toBe(true);
+  await phone.getByLabel('Velocidad de reproducción').selectOption('1.5');
+  await expect.poll(() => host.locator('video').evaluate((video: HTMLVideoElement) => video.playbackRate)).toBe(1.5);
+  await upload(phone, 'despues-del-link.svg', 'image/svg+xml', svgFixture());
+  await expect(host.locator('video')).toHaveCount(0); await expect(phone.locator('.external-actions')).toHaveCount(0);
+  await phone.getByRole('button', { name: 'Salir', exact: true }).click(); await host.close(); await phone.close();
+});
+
+test('real YouTube embed loads and accepts remote playback controls', async ({ browser }) => {
+  test.setTimeout(90000);
+  const host = await browser.newPage(), phone = await browser.newPage(); await associate(host, phone);
+  await phone.getByLabel('Enlace para mostrar').fill('https://www.youtube.com/watch?v=M7lc1UVf-VE'); await phone.getByRole('button', { name: 'Mostrar enlace', exact: true }).click();
+  await expect(phone.locator('.current-file strong')).toContainText('YouTube', { timeout: 20000 });
+  await expect(phone.locator('.media-controls')).toBeVisible();
+  await host.getByRole('button', { name: 'Activar audio' }).click();
+  await expect(phone.getByRole('button', { name: 'Pausar', exact: true })).toBeVisible();
+  await phone.getByRole('button', { name: 'Pausar', exact: true }).click();
+  await expect(phone.getByRole('button', { name: 'Reproducir', exact: true })).toBeVisible();
+  await expect(host.locator('.content-link iframe')).toHaveCount(1);
+  await phone.getByRole('button', { name: 'Salir', exact: true }).click(); await host.close(); await phone.close();
+});
+
+test('real Vimeo response either permits playback or reports provider refusal and allows recovery', async ({ browser }, testInfo) => {
+  test.setTimeout(60000);
+  const host = await browser.newPage(), phone = await browser.newPage(); await associate(host, phone);
+  await upload(phone, 'conservar.svg', 'image/svg+xml', svgFixture());
+  const url = 'https://vimeo.com/76979871/8272103f6e';
+  await phone.getByLabel('Enlace para mostrar').fill(url); await phone.getByRole('button', { name: 'Mostrar enlace', exact: true }).click();
+  await expect(phone.locator('.source-progress')).toHaveCount(0, { timeout: 20000 });
+  const refusal = phone.getByRole('status').filter({ hasText: catalog.embedUnavailable.es });
+  await expect.poll(async () => await refusal.count() || (await phone.locator('.current-file strong').textContent() === 'Vimeo · vimeo.com' ? 1 : 0)).toBe(1);
+  if (await phone.locator('.current-file strong').textContent() === 'Vimeo · vimeo.com' && await phone.locator('.media-controls').count()) {
+    await host.getByRole('button', { name: 'Activar audio' }).click();
+    await expect.poll(async () => await refusal.count() || await phone.getByRole('button', { name: 'Pausar', exact: true }).count()).toBe(1);
+    if (!await refusal.count()) {
+      await phone.getByRole('button', { name: 'Pausar', exact: true }).click(); await expect(phone.getByRole('button', { name: 'Reproducir', exact: true })).toBeVisible();
+      testInfo.annotations.push({ type: 'provider', description: 'Vimeo real playback and remote pause passed.' });
+    }
+  }
+  if (await refusal.count()) {
+    await expect(refusal).toBeVisible(); await expect(phone.locator('.media-controls')).toHaveCount(0);
+    await expect(host.getByRole('link', { name: 'Abrir fuera', exact: true })).toHaveAttribute('href', url);
+    testInfo.annotations.push({ type: 'provider', description: 'Vimeo refused playback; failure, external fallback and recovery passed. Actual Vimeo playback remains unverified.' });
+  } else await expect(phone.locator('.current-file strong')).toHaveText('Vimeo · vimeo.com');
+  await upload(phone, 'recuperado.svg', 'image/svg+xml', svgFixture());
+  await expect(host.locator('.viewer-layer')).toHaveCount(1); await expect(host.locator('iframe')).toHaveCount(0);
+  await expect(refusal).toHaveCount(0);
+  await testInfo.attach('provider-result', { body: Buffer.from(JSON.stringify(testInfo.annotations)), contentType: 'application/json' });
+  await phone.getByRole('button', { name: 'Salir', exact: true }).click(); await host.close(); await phone.close();
+});
 
 async function networkInterruption(page: Page, stallOfflineHandshake = false) {
   let offline = false;

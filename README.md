@@ -2,7 +2,7 @@
 
 Una SPA para presentar archivos del celular en otra pantalla. La pantalla muestra un QR; el primer celular que lo escanea toma el mando. Sin cuentas, base de datos, historial ni almacenamiento de archivos.
 
-**Disponible en [pronter.onrender.com](https://pronter.onrender.com).** Abre ese enlace en el computador y escanea su QR desde el celular. Incluye pantalla completa y un marcador para dibujar sobre la presentación desde ambos dispositivos.
+**Disponible en [pronter.onrender.com](https://pronter.onrender.com).** Abre ese enlace en el computador y escanea su QR desde el celular. Incluye pantalla completa, marcador, cuatro idiomas, guía interactiva y presentación de enlaces.
 
 ## Ejecutar
 
@@ -65,6 +65,25 @@ El plan gratuito permite uso ocasional y pruebas; no garantiza disponibilidad co
 6. Envía otro archivo para sustituir el contenido y eliminar los trazos anteriores. El anterior permanece hasta que el nuevo esté listo. Si falla, se conservan el archivo anterior y sus dibujos y se muestra el error.
 7. Pulsa **Salir** en el celular: el computador muestra «Sesión terminada», libera el contenido y los trazos y recarga después de dos segundos con otro QR.
 
+Puedes elegir **Español, English, Português o Français** en cualquier pantalla sin interrumpir la presentación. Cada dispositivo mantiene su idioma de forma independiente. Se detecta el idioma del navegador y el QR incorpora la selección del PC; `?lang=es|en|pt|fr` permite elegirlo desde la URL. No se guarda una preferencia en el navegador.
+
+El botón **Guía de uso** abre once pasos con un índice y botones Anterior/Siguiente. Explica conexión, archivos, enlaces, páginas, zoom/desplazamiento, reproducción, láser, marcador, pantalla completa, temporizador y salida. Resalta la opción correspondiente cuando está disponible; si el formato actual no la admite, lo explica sin modificar tu presentación. Cierra la guía con su botón o Escape.
+
+### Compartir un enlace
+
+En el mando, pega una URL en **Compartir enlace** y pulsa **Mostrar enlace**. Se aceptan HTTP/HTTPS sin credenciales, hasta 2.048 caracteres; la reproducción integrada en el sitio público requiere HTTPS. Los esquemas ejecutables y los enlaces al propio origen de Pronter se rechazan.
+
+| Enlace | Presentación y controles |
+|---|---|
+| YouTube | Reproductor integrado con play/pausa, posición, volumen y velocidad si el vídeo permite incrustarse. |
+| Vimeo | SDK oficial; play/pausa, posición, volumen y velocidad si el vídeo lo permite. Conserva el código privado de enlaces no listados. |
+| MP4/WebM/MOV o MP3/WAV/M4A/OGG/AAC/FLAC/Opus directos | Reproductor del navegador, sin convertir ni retransmitir el archivo por el servidor. Controles según códec y duración. |
+| Otra página web HTTPS | Se intenta mostrar en un iframe; su interacción y scroll se manejan desde el PC. |
+
+**Abrir fuera** está siempre disponible en el PC. Un sitio puede bloquear la integración con su política de seguridad; los navegadores no ofrecen una detección fiable de todos esos bloqueos. La app explica esa posibilidad sin afirmar que el sitio cargó correctamente. Una pestaña externa se controla desde el PC: la SPA no puede desplazarla ni pulsar sus botones desde el celular. No se usa una extensión ni un proxy para eludir esas restricciones.
+
+Algunos reproductores requieren pulsar **Activar audio** en el computador. Vídeos privados, retirados, con restricciones de dominio o sin permiso de integración pueden fallar; se muestra el aviso y la salida externa. Los enlaces no ofrecen láser, marcador ni captura del contenido de terceros. Un enlace que no termina de prepararse se puede cancelar, conservando el archivo anterior.
+
 El segundo celular recibe un rechazo. Tras detectar una desconexión, la asociación queda reservada durante 20 segundos y se recupera únicamente con la credencial privada que mantiene en memoria el dispositivo original. Al abrir el selector de archivos desde el mando, la reserva del celular se amplía hasta 10 minutos para tolerar que el navegador quede suspendido mientras buscas el archivo. Al volver, el mando recupera la conexión automáticamente; el archivo elegido espera hasta 30 segundos a que ambos canales estén listos antes de enviarse. Una recarga del celular pierde la credencial. Si vence la reserva o pulsas **Salir**, se cierra la asociación y se renueva el QR.
 
 Mientras la pantalla confirma un cambio de página, zoom o desplazamiento, el mando espera antes de admitir otro control o un dibujo. Durante una desconexión se descartan los lotes de dibujo pendientes; al reconectar se conserva lo que la pantalla recibió y se eliminan los avisos de controles de la conexión anterior.
@@ -87,9 +106,9 @@ El mando intenta activar también la pantalla completa nativa del PC. Chrome y o
 | MP4, WebM, MOV, MKV, AVI | Reproductor nativo y conversión cuando es necesaria | Reproducción, volumen, posición, velocidad, zoom, láser, marcador |
 | Markdown | React Markdown + GFM, sin HTML crudo | Desplazamiento, zoom, láser, marcador |
 
-- Transferencia máxima: **1 GB decimal**, 1.000.000.000 bytes. No se lee el archivo entero en el celular: se envían fragmentos de 256 KiB, con cuatro como máximo pendientes de confirmación.
-- Si el navegador no reproduce un audio o video, **FFmpeg WASM convierte en el computador**. La entrada y salida de conversión se limitan a **200 MB**; video de salida H.264/AAC hasta 1920×1080 y audio MP3. No hay conversión en el servidor. Un formato incompatible que exceda ese límite produce un aviso y conserva la presentación anterior.
-- Admitir una transferencia de 1 GB no garantiza que todo documento de ese tamaño pueda decodificarse: el visor depende de la RAM disponible. Las imágenes se limitan a 50 megapíxeles, las páginas PDF a un lienzo de 16 megapíxeles y se valida la expansión ZIP de PPTX antes de descomprimir.
+- Transferencia máxima: **100 MB decimales**, 100.000.000 bytes, inclusive. El celular rechaza el exceso antes de leerlo; el servidor y el anfitrión también validan el límite. Se envían fragmentos de 256 KiB, con cuatro como máximo pendientes de confirmación.
+- Si el navegador no reproduce un audio o video, **FFmpeg WASM convierte en el computador**. La entrada se limita a **25 MB**, la salida a **100 MB** y la conversión a **60 segundos**, incluyendo la carga del motor. El Worker termina al cancelar o vencer ese plazo. Salida H.264/AAC hasta 1920×1080 o audio MP3. Si se exceden esos límites, se conserva la presentación anterior; no se entrega un vídeo truncado. No hay conversión en el servidor.
+- El tamaño comprimido no garantiza que cualquier contenido pueda decodificarse en un equipo con poca RAM. Hay un plazo general de preparación de **120 segundos**. Las imágenes se limitan a 50 megapíxeles, las páginas PDF a un lienzo de 16 megapíxeles y PPTX a **300 MB expandidos en total**, con **100 MB por entrada ZIP**, antes de descomprimir.
 - PowerPoint se representa con un motor web: fuentes, SmartArt, videos y efectos propietarios pueden diferir del original. La vista estática ayuda a presentar documentos con efectos incompatibles. Los archivos protegidos con contraseña deben enviarse sin protección.
 - No se fuerza la descarga. Los recursos remotos de documentos y sus enlaces se bloquean; las imágenes externas de Markdown aparecen como un aviso. No se ejecutan scripts, macros ni HTML del archivo.
 - La opción de movimiento reducido desactiva las animaciones decorativas y usa PowerPoint estático.
@@ -118,7 +137,9 @@ Borrar y deshacer invalidan también la captura del celular: una imagen atrasada
 
 Si el servidor todavía ve abierta una conexión perdida, comprueba durante un máximo de 1,5 segundos si responde antes de sustituirla. Solo la credencial privada original permite recuperarla; los otros celulares que escanean el QR y las recuperaciones duplicadas de conexiones que sí responden siguen rechazados. La sustitución desconecta el transporte anterior antes de aceptar sus controles o archivos posteriores.
 
-La app no utiliza cookies, localStorage, sessionStorage, IndexedDB, service workers, métricas, cuentas ni registros de solicitudes. Fuentes, bibliotecas y WASM se sirven desde el propio sitio. El navegador puede cachear esos recursos públicos; eso no es un historial de presentaciones. La política de registros del proveedor de alojamiento se configura por separado. El cifrado de transporte depende de publicar con HTTPS.
+Pronter no utiliza cookies, localStorage, sessionStorage, IndexedDB, service workers, métricas, cuentas ni registros de solicitudes. Fuentes, bibliotecas y WASM para archivos se sirven desde el propio sitio. El navegador puede cachear esos recursos públicos; eso no es un historial de presentaciones. El idioma solo vive en memoria y en la URL. La política de registros del proveedor de alojamiento se configura por separado. El cifrado de transporte depende de publicar con HTTPS.
+
+Al compartir enlaces, el PC contacta con el proveedor externo; YouTube carga su API oficial y usa `youtube-nocookie.com`, Vimeo usa `dnt=1`. La app no captura esos reproductores ni registra su actividad. Las páginas y servicios externos tienen sus propias políticas de cookies y datos; esas opciones de integración no garantizan ausencia de seguimiento por terceros. Los reproductores reciben el origen del sitio para validar la integración, sin enviar el token privado de asociación.
 
 ## Verificación
 
@@ -130,7 +151,7 @@ npm run build
 npm run test:e2e
 ```
 
-Las pruebas de Socket.IO comprueban concurrencia de admisión, autenticación, caducidad, reserva del selector de archivos, cierre, fragmentos duplicados/fuera de orden y una transferencia real de 1 GB sin ensamblarla en el servidor de prueba. Las pruebas de navegador decodifican el QR renderizado y conectan dos contextos independientes: recepción, páginas PDF/PPTX, Markdown, audio, video, conversión AVI, sustitución, preservación ante error, láser, rechazo de otro celular, reconexión, ausencia de almacenamiento y cierre. También comprueban el envío desde una IP local por HTTP, una suspensión de 16 segundos durante la selección, un corte de red de 22 segundos y la recuperación de un rechazo temporal del canal de archivos.
+Las pruebas de Socket.IO comprueban concurrencia de admisión, autenticación, caducidad, reserva del selector de archivos, cierre, fragmentos duplicados/fuera de orden y una transferencia real de 100 MB sin ensamblarla en el servidor de prueba. Las pruebas de navegador decodifican el QR renderizado y conectan dos contextos independientes: recepción, páginas PDF/PPTX, Markdown, audio, video, conversión AVI, sustitución, preservación ante error, láser, rechazo de otro celular, reconexión, ausencia de almacenamiento y cierre. También comprueban el envío desde una IP local por HTTP, una suspensión de 16 segundos durante la selección, un corte de red de 22 segundos y la recuperación de un rechazo temporal del canal de archivos.
 
 Los resultados y límites de la verificación realizada están en [VALIDATION.md](VALIDATION.md).
 

@@ -1,102 +1,168 @@
+import { t } from './../i18n';
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { Check, PenLine, Trash2, Undo2 } from 'lucide-react';
 import { INK_COLORS, MAX_PREVIEW_BYTES, previewFrameSchema, type Ack, type InkColor, type InkPoint, type InkWidth, type PreviewFrame, type PreviewView } from '../../shared/protocol';
 import { request, type Connection } from '../connection';
 import { InkGesture } from '../lib/ink-gesture';
-
 const colorNames: Record<InkColor, string> = { coral: 'coral', blue: 'azul', yellow: 'amarillo', white: 'blanco', dark: 'oscuro' };
 export function MarkerTools({ color, width, onColor, onWidth, onUndo, onClear, disabled, count }: {
-  color: InkColor; width: InkWidth; onColor: (color: InkColor) => void; onWidth: (width: InkWidth) => void;
-  onUndo: () => void; onClear: () => void; disabled: boolean; count: number;
+    color: InkColor;
+    width: InkWidth;
+    onColor: (color: InkColor) => void;
+    onWidth: (width: InkWidth) => void;
+    onUndo: () => void;
+    onClear: () => void;
+    disabled: boolean;
+    count: number;
 }) {
-  return <div className="marker-tools">
-    <div className="marker-colors" role="group" aria-label="Color del marcador">
-      {(Object.keys(INK_COLORS) as InkColor[]).map((value) => <button key={value} type="button" className={`marker-swatch ${value === color ? 'is-selected' : ''}`} style={{ '--marker-color': INK_COLORS[value] } as React.CSSProperties} disabled={disabled} aria-label={`Color ${colorNames[value]}`} aria-pressed={color === value} onClick={() => onColor(value)}><i>{color === value && <Check size={14} aria-hidden="true" />}</i></button>)}
+    return <div className="marker-tools">
+    <div className="marker-colors" role="group" aria-label={t("Color del marcador")}>
+      {(Object.keys(INK_COLORS) as InkColor[]).map((value) => <button key={value} type="button" className={`marker-swatch ${value === color ? 'is-selected' : ''}`} style={{ '--marker-color': INK_COLORS[value] } as React.CSSProperties} disabled={disabled} aria-label={t(`Color ${colorNames[value]}`)} aria-pressed={color === value} onClick={() => onColor(value)}><i>{color === value && <Check size={14} aria-hidden="true"/>}</i></button>)}
     </div>
-    <label className="marker-width"><span>Trazo</span><select aria-label="Grosor del marcador" value={width} disabled={disabled} onChange={(event) => onWidth(Number(event.target.value) as InkWidth)}><option value="0.006">Fino</option><option value="0.014">Grueso</option></select></label>
-    <div className="marker-actions"><button type="button" className="button" disabled={disabled || count === 0} onClick={onUndo} aria-label="Deshacer último trazo" title="Deshacer último trazo"><Undo2 size={18} aria-hidden="true" /><span>Deshacer</span></button><button type="button" className="button" disabled={disabled || count === 0} onClick={onClear} aria-label="Borrar trazos de esta página" title="Borrar trazos de esta página"><Trash2 size={18} aria-hidden="true" /><span>Borrar</span></button></div>
+    <label className="marker-width"><span>{t("Trazo")}</span><select aria-label={t("Grosor del marcador")} value={width} disabled={disabled} onChange={(event) => onWidth(Number(event.target.value) as InkWidth)}><option value="0.006">{t("Fino")}</option><option value="0.014">{t("Grueso")}</option></select></label>
+    <div className="marker-actions"><button type="button" className="button" disabled={disabled || count === 0} onClick={onUndo} aria-label={t("Deshacer \u00FAltimo trazo")} title={t("Deshacer \u00FAltimo trazo")}><Undo2 size={18} aria-hidden="true"/><span>{t("Deshacer")}</span></button><button type="button" className="button" disabled={disabled || count === 0} onClick={onClear} aria-label={t("Borrar trazos de esta p\u00E1gina")} title={t("Borrar trazos de esta p\u00E1gina")}><Trash2 size={18} aria-hidden="true"/><span>{t("Borrar")}</span></button></div>
   </div>;
 }
-
 export function MarkerPad({ connection, assetId, page, zoom, enabled, color, width, count, view, onError }: {
-  connection: Connection; assetId: string; page: number; zoom: number; enabled: boolean; color: InkColor; width: InkWidth; count: number; onError: (message: string) => void;
-  view: PreviewView | null;
+    connection: Connection;
+    assetId: string;
+    page: number;
+    zoom: number;
+    enabled: boolean;
+    color: InkColor;
+    width: InkWidth;
+    count: number;
+    onError: (message: string) => void;
+    view: PreviewView | null;
 }) {
-  const canvas = useRef<HTMLCanvasElement>(null);
-  const pointerId = useRef<number | undefined>(undefined);
-  const sender = useRef<InkGesture | undefined>(undefined);
-  const last = useRef<InkPoint | undefined>(undefined);
-  const [frame, setFrame] = useState<(PreviewFrame & { url: string }) | null>(null);
-  const [loaded, setLoaded] = useState(0);
-  const sequence = useRef(0);
-  const url = useRef('');
-  const currentFrame = !!frame && frame.assetId === assetId && frame.page === page && frame.zoom === zoom && frame.viewId === view?.viewId;
-  const ready = enabled && currentFrame && loaded === frame!.sequence;
-  const errorHandler = useRef(onError); errorHandler.current = onError;
-  useEffect(() => {
-    sender.current = new InkGesture((command) => request(connection.control, 'viewer:ink', command), (message) => { if (connection.snapshot.status === 'connected') errorHandler.current(message); });
-    // Cancel at the connection event, before queued ACKs can continue a gesture
-    // on the recovered socket. React's visual update can happen later.
-    const unsubscribe = connection.subscribe(() => { if (connection.snapshot.status !== 'connected') sender.current?.cancel(); });
-    return () => { unsubscribe(); sender.current?.cancel(); };
-  }, [connection]);
-  useEffect(() => {
-    const remove = connection.onData('preview:frame', (raw: unknown, bytes: ArrayBuffer, ack: Ack) => {
-      const parsed = previewFrameSchema.safeParse(raw);
-      if (!parsed.success || bytes.byteLength > MAX_PREVIEW_BYTES) { ack({ ok: false }); return; }
-      const meta = parsed.data;
-      const { viewer, previewView } = connection.snapshot;
-      // The control channel can invalidate a frame while its binary image is
-      // still traveling. Do not let that image bring erased ink or an old file back.
-      if (meta.assetId !== viewer.assetId || meta.page !== viewer.page || meta.zoom !== viewer.zoom || meta.viewId !== previewView?.viewId) { ack({ ok: false }); return; }
-      if (meta.sequence <= sequence.current) { ack({ ok: true }); return; }
-      sequence.current = meta.sequence;
-      const next = URL.createObjectURL(new Blob([bytes], { type: 'image/jpeg' }));
-      if (url.current) URL.revokeObjectURL(url.current); url.current = next;
-      setFrame({ ...meta, url: next }); ack({ ok: true });
-    });
-    connection.watchPreview(true);
-    return () => { connection.watchPreview(false); remove(); if (url.current) URL.revokeObjectURL(url.current); url.current = ''; };
-  }, [connection]);
-  const clearPreview = () => { const node = canvas.current; node?.getContext('2d')?.clearRect(0, 0, node.width, node.height); };
-  useEffect(() => { sender.current?.cancel(); pointerId.current = undefined; last.current = undefined; clearPreview(); }, [assetId, page, zoom, enabled, view?.viewId]);
-  useEffect(() => { if (pointerId.current === undefined) clearPreview(); }, [loaded]);
-  useEffect(() => { if (!count) clearPreview(); }, [count]);
-  const point = (event: ReactPointerEvent<HTMLDivElement> | PointerEvent, node: HTMLDivElement): InkPoint => {
-    const rect = node.getBoundingClientRect();
-    return { x: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)), y: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)) };
-  };
-  const preview = (position: InkPoint) => {
-    const node = canvas.current, context = node?.getContext('2d'); if (!node || !context) return;
-    context.lineCap = 'round'; context.lineJoin = 'round'; context.lineWidth = width * Math.min(node.width, node.height);
-    context.strokeStyle = context.fillStyle = INK_COLORS[color]; context.beginPath();
-    if (last.current) { context.moveTo(last.current.x * node.width, last.current.y * node.height); context.lineTo(position.x * node.width, position.y * node.height); context.stroke(); }
-    else { context.arc(position.x * node.width, position.y * node.height, context.lineWidth / 2, 0, Math.PI * 2); context.fill(); }
-    last.current = position;
-  };
-  const stop = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (event.pointerId !== pointerId.current) return;
-    if (event.type === 'pointerup') { const position = point(event, event.currentTarget); sender.current?.move(position); preview(position); }
-    pointerId.current = undefined; last.current = undefined; sender.current?.end();
-  };
-  return <div className={`marker-section ${ready ? '' : 'is-disabled'}`}>
-    <div className="section-caption"><span><PenLine size={18} aria-hidden="true" />Marcador</span><span>Página {page}</span></div>
-    <div className="marker-pad" role="application" aria-label="Panel para dibujar sobre la presentación" aria-disabled={!ready} style={{ aspectRatio: frame && frame.assetId === assetId ? `${frame.width} / ${frame.height}` : '5 / 3' }}
-      onPointerDown={(event) => {
-        if (!ready || event.button !== 0 || !event.isPrimary || pointerId.current !== undefined) return;
-        event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId); pointerId.current = event.pointerId;
-        clearPreview(); last.current = undefined; onError('');
-        const position = point(event, event.currentTarget); preview(position); sender.current?.begin(assetId, page, color, width, position, frame!.viewId);
-      }}
-      onPointerMove={(event) => {
-        if (event.pointerId !== pointerId.current || !ready) return;
-        const samples = event.nativeEvent.getCoalescedEvents?.();
-        for (const sample of samples?.length ? samples : [event.nativeEvent]) { const position = point(sample, event.currentTarget); preview(position); sender.current?.move(position); }
-      }} onPointerUp={stop} onPointerCancel={stop} onLostPointerCapture={stop}>
-      {currentFrame && <img className="marker-preview" src={frame!.url} alt={`Vista de ${connection.snapshot.viewer.name}, página ${frame!.page}`} draggable={false} data-page={frame!.page} data-view={frame!.viewId} onLoad={() => { if (url.current === frame!.url) setLoaded(frame!.sequence); }} onError={() => { if (url.current === frame!.url) { setLoaded(0); connection.watchPreview(true); } }} />}
-      <canvas ref={canvas} width={frame?.width || 800} height={frame?.height || 480} aria-hidden="true" />
-      {!ready && <span role="status">{enabled ? 'Actualizando la vista del PC…' : 'Esperando la pantalla…'}</span>}
+    const canvas = useRef<HTMLCanvasElement>(null);
+    const pointerId = useRef<number | undefined>(undefined);
+    const sender = useRef<InkGesture | undefined>(undefined);
+    const last = useRef<InkPoint | undefined>(undefined);
+    const [frame, setFrame] = useState<(PreviewFrame & {
+        url: string;
+    }) | null>(null);
+    const [loaded, setLoaded] = useState(0);
+    const sequence = useRef(0);
+    const url = useRef('');
+    const currentFrame = !!frame && frame.assetId === assetId && frame.page === page && frame.zoom === zoom && frame.viewId === view?.viewId;
+    const ready = enabled && currentFrame && loaded === frame!.sequence;
+    const errorHandler = useRef(onError);
+    errorHandler.current = onError;
+    useEffect(() => {
+        sender.current = new InkGesture((command) => request(connection.control, 'viewer:ink', command), (message) => { if (connection.snapshot.status === 'connected')
+            errorHandler.current(message); });
+        // Cancel at the connection event, before queued ACKs can continue a gesture
+        // on the recovered socket. React's visual update can happen later.
+        const unsubscribe = connection.subscribe(() => { if (connection.snapshot.status !== 'connected')
+            sender.current?.cancel(); });
+        return () => { unsubscribe(); sender.current?.cancel(); };
+    }, [connection]);
+    useEffect(() => {
+        const remove = connection.onData('preview:frame', (raw: unknown, bytes: ArrayBuffer, ack: Ack) => {
+            const parsed = previewFrameSchema.safeParse(raw);
+            if (!parsed.success || bytes.byteLength > MAX_PREVIEW_BYTES) {
+                ack({ ok: false });
+                return;
+            }
+            const meta = parsed.data;
+            const { viewer, previewView } = connection.snapshot;
+            // The control channel can invalidate a frame while its binary image is
+            // still traveling. Do not let that image bring erased ink or an old file back.
+            if (meta.assetId !== viewer.assetId || meta.page !== viewer.page || meta.zoom !== viewer.zoom || meta.viewId !== previewView?.viewId) {
+                ack({ ok: false });
+                return;
+            }
+            if (meta.sequence <= sequence.current) {
+                ack({ ok: true });
+                return;
+            }
+            sequence.current = meta.sequence;
+            const next = URL.createObjectURL(new Blob([bytes], { type: 'image/jpeg' }));
+            if (url.current)
+                URL.revokeObjectURL(url.current);
+            url.current = next;
+            setFrame({ ...meta, url: next });
+            ack({ ok: true });
+        });
+        connection.watchPreview(true);
+        return () => { connection.watchPreview(false); remove(); if (url.current)
+            URL.revokeObjectURL(url.current); url.current = ''; };
+    }, [connection]);
+    const clearPreview = () => { const node = canvas.current; node?.getContext('2d')?.clearRect(0, 0, node.width, node.height); };
+    useEffect(() => { sender.current?.cancel(); pointerId.current = undefined; last.current = undefined; clearPreview(); }, [assetId, page, zoom, enabled, view?.viewId]);
+    useEffect(() => { if (pointerId.current === undefined)
+        clearPreview(); }, [loaded]);
+    useEffect(() => { if (!count)
+        clearPreview(); }, [count]);
+    const point = (event: ReactPointerEvent<HTMLDivElement> | PointerEvent, node: HTMLDivElement): InkPoint => {
+        const rect = node.getBoundingClientRect();
+        return { x: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)), y: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)) };
+    };
+    const preview = (position: InkPoint) => {
+        const node = canvas.current, context = node?.getContext('2d');
+        if (!node || !context)
+            return;
+        context.lineCap = 'round';
+        context.lineJoin = 'round';
+        context.lineWidth = width * Math.min(node.width, node.height);
+        context.strokeStyle = context.fillStyle = INK_COLORS[color];
+        context.beginPath();
+        if (last.current) {
+            context.moveTo(last.current.x * node.width, last.current.y * node.height);
+            context.lineTo(position.x * node.width, position.y * node.height);
+            context.stroke();
+        }
+        else {
+            context.arc(position.x * node.width, position.y * node.height, context.lineWidth / 2, 0, Math.PI * 2);
+            context.fill();
+        }
+        last.current = position;
+    };
+    const stop = (event: ReactPointerEvent<HTMLDivElement>) => {
+        if (event.pointerId !== pointerId.current)
+            return;
+        if (event.type === 'pointerup') {
+            const position = point(event, event.currentTarget);
+            sender.current?.move(position);
+            preview(position);
+        }
+        pointerId.current = undefined;
+        last.current = undefined;
+        sender.current?.end();
+    };
+    return <div className={`marker-section ${ready ? '' : 'is-disabled'}`}>
+    <div className="section-caption"><span><PenLine size={18} aria-hidden="true"/>{t("Marcador")}</span><span>{t("P\u00E1gina ")}{page}</span></div>
+    <div className="marker-pad" role="application" aria-label={t("Panel para dibujar sobre la presentaci\u00F3n")} aria-disabled={!ready} style={{ aspectRatio: frame && frame.assetId === assetId ? `${frame.width} / ${frame.height}` : '5 / 3' }} onPointerDown={(event) => {
+            if (!ready || event.button !== 0 || !event.isPrimary || pointerId.current !== undefined)
+                return;
+            event.preventDefault();
+            event.currentTarget.setPointerCapture(event.pointerId);
+            pointerId.current = event.pointerId;
+            clearPreview();
+            last.current = undefined;
+            onError('');
+            const position = point(event, event.currentTarget);
+            preview(position);
+            sender.current?.begin(assetId, page, color, width, position, frame!.viewId);
+        }} onPointerMove={(event) => {
+            if (event.pointerId !== pointerId.current || !ready)
+                return;
+            const samples = event.nativeEvent.getCoalescedEvents?.();
+            for (const sample of samples?.length ? samples : [event.nativeEvent]) {
+                const position = point(sample, event.currentTarget);
+                preview(position);
+                sender.current?.move(position);
+            }
+        }} onPointerUp={stop} onPointerCancel={stop} onLostPointerCapture={stop}>
+      {currentFrame && <img className="marker-preview" src={frame!.url} alt={t(`Vista de ${connection.snapshot.viewer.name}, página ${frame!.page}`)} draggable={false} data-page={frame!.page} data-view={frame!.viewId} onLoad={() => { if (url.current === frame!.url)
+        setLoaded(frame!.sequence); }} onError={() => { if (url.current === frame!.url) {
+        setLoaded(0);
+        connection.watchPreview(true);
+    } }}/>}
+      <canvas ref={canvas} width={frame?.width || 800} height={frame?.height || 480} aria-hidden="true"/>
+      {!ready && <span role="status">{enabled ? t("Actualizando la vista del PC\u2026") : t("Esperando la pantalla\u2026")}</span>}
     </div>
-    <p className="marker-help">Dibuja sobre el archivo que ves aquí. La vista sigue la página y el zoom del PC; los trazos se conservan en cada página.</p>
+    <p className="marker-help">{t("Dibuja sobre el archivo que ves aqu\u00ED. La vista sigue la p\u00E1gina y el zoom del PC; los trazos se conservan en cada p\u00E1gina.")}</p>
   </div>;
 }

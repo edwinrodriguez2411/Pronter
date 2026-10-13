@@ -1,7 +1,11 @@
 import { z } from 'zod';
+import type { UiMessage } from './messages';
 
-export const MAX_FILE_BYTES = 1_000_000_000;
-export const MAX_CONVERSION_BYTES = 200_000_000;
+export const MAX_FILE_BYTES = 100_000_000;
+export const MAX_CONVERSION_BYTES = 25_000_000;
+export const MAX_CONVERTED_BYTES = 100_000_000;
+export const CONVERSION_TIMEOUT_MS = 60_000;
+export const PREPARATION_TIMEOUT_MS = 120_000;
 export const CHUNK_BYTES = 256 * 1024;
 export const TRANSFER_WINDOW = 4;
 export const ACK_TIMEOUT_MS = 15000;
@@ -13,10 +17,12 @@ export const displaySchema = z.object({ expanded: z.boolean(), native: z.boolean
 export interface PairPresence { selectingFile: boolean; reconnectUntil: number | null }
 export const FILE_ACCEPT = '.jpg,.jpeg,.png,.webp,.gif,.avif,.svg,.heic,.heif,.pdf,.ppt,.pptx,.mp3,.wav,.m4a,.aac,.ogg,.flac,.opus,.mp4,.webm,.mov,.mkv,.avi,.md,.markdown';
 export type FileKind = 'image' | 'pdf' | 'powerpoint' | 'audio' | 'video' | 'markdown';
+export type LinkProvider = 'youtube' | 'vimeo' | 'video' | 'audio' | 'web';
+export interface LinkSource { id: string; url: string; provider: LinkProvider; mediaId?: string; hash?: string; start?: number }
 export type Role = 'host' | 'controller';
 export type Capability = 'pages' | 'zoom' | 'pan' | 'laser' | 'media' | 'scroll' | 'animations' | 'draw';
 export type ConnectionStatus = 'connecting' | 'waiting' | 'connected' | 'reconnecting' | 'ended' | 'error';
-export type Reply<T = unknown> = { ok: boolean; data?: T; error?: string; code?: string };
+export type Reply<T = unknown> = { ok: boolean; data?: T; error?: string; code?: string; message?: UiMessage };
 export type Ack<T = unknown> = (reply: Reply<T>) => void;
 export interface Credentials { id: string; key: string; role: Role }
 export interface PairResponse extends Credentials { token?: string; connected: boolean }
@@ -43,13 +49,19 @@ export interface ViewerState {
   progress: number;
   phase: 'idle' | 'receiving' | 'preparing' | 'converting';
   notice: string;
+  noticeMessage?: UiMessage;
   inkCount: number;
+  link?: LinkSource;
+  failedLink?: LinkSource;
+  mediaActions?: ('seek' | 'volume' | 'rate')[];
+  pendingId?: string;
+  pendingName?: string;
 }
 export const emptyViewer = (): ViewerState => ({
   assetId: null, name: '', kind: null, capabilities: [], page: 1, pages: 1,
   zoom: 1, paused: true, currentTime: 0, duration: 0, volume: 1, rate: 1,
   black: false, staticMode: false, animationStep: 0, animationSteps: 0,
-  needsActivation: false, progress: 0, phase: 'idle', notice: '', inkCount: 0,
+  needsActivation: false, progress: 0, phase: 'idle', notice: '', noticeMessage: undefined, inkCount: 0, link: undefined, failedLink: undefined, mediaActions: undefined, pendingId: undefined, pendingName: undefined,
 });
 export const COMMANDS = ['next', 'previous', 'page', 'zoom', 'fit', 'pan', 'scroll', 'play', 'pause', 'volume', 'seek', 'rate', 'black', 'static'] as const;
 export type CommandType = typeof COMMANDS[number];
@@ -100,6 +112,11 @@ export const viewerSchema = z.object({
   paused: z.boolean(), currentTime: z.number().finite().min(0), duration: z.number().finite().min(0), volume: z.number().min(0).max(1), rate: z.number().min(0.25).max(3),
   black: z.boolean(), staticMode: z.boolean(), animationStep: z.number().int().min(0), animationSteps: z.number().int().min(0),
   needsActivation: z.boolean(), progress: z.number().min(0).max(1), phase: z.enum(['idle', 'receiving', 'preparing', 'converting']), notice: z.string().max(500), inkCount: z.number().int().min(0).max(250),
+  noticeMessage: z.object({ code: z.string().max(100), params: z.record(z.string().max(100), z.union([z.string().max(500), z.number().finite()])).optional() }).strict().optional(),
+  link: z.object({ id, url: z.string().max(2048), provider: z.enum(['youtube', 'vimeo', 'video', 'audio', 'web']), mediaId: z.string().max(100).optional(), hash: z.string().max(100).optional(), start: z.number().finite().min(0).max(864000).optional() }).strict().optional(),
+  failedLink: z.object({ id, url: z.string().max(2048), provider: z.enum(['youtube', 'vimeo', 'video', 'audio', 'web']), mediaId: z.string().max(100).optional(), hash: z.string().max(100).optional(), start: z.number().finite().min(0).max(864000).optional() }).strict().optional(),
+  mediaActions: z.array(z.enum(['seek', 'volume', 'rate'])).max(3).optional(),
+  pendingId: id.optional(), pendingName: z.string().max(255).optional(),
 }).strict();
 
 export function kindFromName(name: string): FileKind | null {

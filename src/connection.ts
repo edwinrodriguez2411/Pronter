@@ -1,5 +1,6 @@
 import { io, type Socket } from 'socket.io-client';
 import { useEffect, useState } from 'react';
+import { formatMessage } from '../shared/messages';
 import { ACK_TIMEOUT_MS, emptyDisplay, emptyViewer, type ConnectionStatus, type Credentials, type DisplayState, type PairPresence, type PairResponse, type PreviewView, type Reply, type Role, type ViewerState } from '../shared/protocol';
 
 export class RequestError extends Error {
@@ -9,7 +10,7 @@ export class RequestError extends Error {
 export function request<T = unknown>(socket: Socket, event: string, ...args: unknown[]): Promise<T> {
   if (!socket.connected) return Promise.reject(new Error('La conexión se interrumpió. Espera a que vuelva.'));
   return socket.timeout(ACK_TIMEOUT_MS).emitWithAck(event, ...args).then((reply: Reply<T>) => {
-    if (!reply?.ok) throw new RequestError(reply?.error || 'No se pudo completar la operación.', reply?.code);
+    if (!reply?.ok) throw new RequestError(reply?.message ? formatMessage(reply.message, 'es') : reply?.error || 'No se pudo completar la operación.', reply?.code);
     return reply.data as T;
   }).catch((error: Error) => {
     if (error.message === 'operation has timed out') throw new RequestError('La pantalla no respondió a tiempo. Intenta de nuevo.', 'ACK_TIMEOUT');
@@ -103,7 +104,7 @@ export class Connection {
       this.associatedId = socketId;
       this.credentials = { id: pair.id, key: pair.key, role: pair.role };
       this.hasPartner ||= pair.connected;
-      if (this.role === 'controller') { this.scannedToken = ''; window.history.replaceState(null, '', '/control'); }
+      if (this.role === 'controller') { this.scannedToken = ''; window.history.replaceState(null, '', '/control' + window.location.search); }
       this.patch({ token: pair.token ?? this.snapshot.token, status: pair.connected ? 'connected' : this.hasPartner ? 'reconnecting' : 'waiting', error: '', reconnectAt: null });
       if (this.role === 'controller') this.control.emit('pair:picker', this.selectingFile);
       if (this.role === 'controller') this.control.emit('preview:watch', this.previewWatching);

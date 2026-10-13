@@ -11,7 +11,7 @@ const ffmpeg = dirname(fileURLToPath(import.meta.resolve('@ffmpeg/core')));
 cpSync(ffmpeg, resolve(destination, 'ffmpeg'), { recursive: true });
 const licenses = resolve(destination, 'licenses');
 mkdirSync(licenses, { recursive: true });
-for (const name of ['react', 'react-dom', 'socket.io-client', 'pdfjs-dist', '@web-ppt/core', '@web-ppt/viewer-core', '@ffmpeg/ffmpeg', '@ffmpeg/core', 'libheif-js', 'dompurify', 'react-markdown', 'remark-gfm', 'rehype-sanitize', 'qrcode.react', 'lucide-react', '@fontsource-variable/bricolage-grotesque', '@fontsource-variable/dm-sans']) {
+for (const name of ['react', 'react-dom', 'socket.io-client', '@vimeo/player', 'pdfjs-dist', '@web-ppt/core', '@web-ppt/viewer-core', '@ffmpeg/ffmpeg', '@ffmpeg/core', 'libheif-js', 'dompurify', 'react-markdown', 'remark-gfm', 'rehype-sanitize', 'qrcode.react', 'lucide-react', '@fontsource-variable/bricolage-grotesque', '@fontsource-variable/dm-sans']) {
   const root = resolve('node_modules', name);
   for (const file of readdirSync(root).filter((file) => /^(licen[sc]e|copying|notice)(\.|$)/i.test(file))) {
     cpSync(resolve(root, file), resolve(licenses, `${name.replaceAll('/', '_')}-${file}`), { recursive: true });

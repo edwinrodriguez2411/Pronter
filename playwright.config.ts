@@ -9,7 +9,7 @@ export default defineConfig({
   workers: 1,
   timeout: 60000,
   expect: { timeout: 15000 },
-  use: { baseURL, headless: true, screenshot: 'only-on-failure' },
+  use: { baseURL, headless: true, locale: 'es-CO', screenshot: 'only-on-failure' },
   webServer: deployedURL ? undefined : { command: 'npm start', url: `${baseURL}/api/health`, reuseExistingServer: !process.env.CI, timeout: 30000 },
   projects: [{ name: 'chromium', use: { browserName: 'chromium' } }],
 });

@@ -9,6 +9,7 @@ Las versiones exactas y dependencias transitivas figuran en `package-lock.json`.
 | Express | 5.2.1 | MIT · https://github.com/expressjs/express |
 | PDF.js / pdfjs-dist | 6.4.299 | Apache-2.0 · https://github.com/mozilla/pdf.js |
 | @web-ppt/core y viewer-core | 0.4.5 | MIT · https://github.com/unStone/web-ppt |
+| @vimeo/player | 2.30.4 | MIT · https://github.com/vimeo/player.js |
 | @ffmpeg/ffmpeg | 0.12.15 | MIT · https://github.com/ffmpegwasm/ffmpeg.wasm |
 | @ffmpeg/core | 0.12.10 | GPL-2.0-or-later · https://github.com/ffmpegwasm/ffmpeg.wasm/tree/n0.12.10 |
 | libheif-js / libheif | 1.23.5 | LGPL-3.0 · https://github.com/catdad-experiments/libheif-js · https://github.com/strukturag/libheif |

@@ -15,7 +15,7 @@ app.use((_request, response, next) => {
   response.setHeader('X-Content-Type-Options', 'nosniff');
   response.setHeader('Referrer-Policy', 'no-referrer');
   response.setHeader('X-Frame-Options', 'DENY');
-  if (production) response.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob: data:; font-src 'self' blob: data:; connect-src 'self' blob:; worker-src 'self' blob:; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'self'");
+  if (production) response.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' blob: https://www.youtube.com https://s.ytimg.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob: data: https:; font-src 'self' blob: data:; connect-src 'self' blob:; worker-src 'self' blob:; object-src 'none'; frame-src https:; base-uri 'none'; form-action 'self'");
   next();
 });
 app.get('/api/config', (request, response) => {

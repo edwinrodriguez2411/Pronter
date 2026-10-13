@@ -20,6 +20,7 @@
     "@ffmpeg/ffmpeg": "0.12.15",
     "@fontsource-variable/bricolage-grotesque": "5.3.0",
     "@fontsource-variable/dm-sans": "5.3.0",
+    "@vimeo/player": "2.30.4",
     "@web-ppt/core": "0.4.5",
     "@web-ppt/viewer-core": "0.4.5",
     "dompurify": "3.4.16",

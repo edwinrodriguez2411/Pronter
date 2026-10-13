@@ -4,15 +4,16 @@ import { validateSignature, validatePowerpointZip, checkConversionSize } from '.
 import { pdfFixture, pptxFixture } from './fixtures';
 
 describe('public input contracts', () => {
-  it('admits 1 GB and rejects oversized or empty files', () => {
+  it('admits exactly 100 MB and rejects oversized, 300 MB or empty files', () => {
     const meta = { id: 'file', name: 'clip.mp4', type: 'video/mp4', size: MAX_FILE_BYTES, kind: 'video' };
     expect(fileMetaSchema.safeParse(meta).success).toBe(true);
     expect(fileMetaSchema.safeParse({ ...meta, size: MAX_FILE_BYTES + 1 }).success).toBe(false);
+    expect(fileMetaSchema.safeParse({ ...meta, size: 300_000_000 }).success).toBe(false);
     expect(fileMetaSchema.safeParse({ ...meta, size: 0 }).success).toBe(false);
   });
   it('limits conversion independently from transfer', () => {
-    expect(() => checkConversionSize(200_000_000)).not.toThrow();
-    expect(() => checkConversionSize(200_000_001)).toThrow(/200 MB/);
+    expect(() => checkConversionSize(25_000_000)).not.toThrow();
+    expect(() => checkConversionSize(25_000_001)).toThrow(/25 MB/);
   });
   it('rejects invalid command values and nonfinite viewer state', () => {
     const command = { id: 'command', assetId: null, type: 'volume', value: 1 };
