@@ -1,5 +1,15 @@
 # Verificación realizada
 
+## Primer intento de YouTube y navegación web — 13 de octubre de 2026
+
+- Se reprodujo el fallo antes de corregirlo: un navegador nuevo, sin interacción en el PC y con la política de activación de Chrome, recibía el enlace pero rechazaba el primer `Reproducir` remoto. El mando permanecía pausado y mostraba que había que activar audio. La prueba anterior empezaba activando audio en el PC y no cubría este caso.
+- La regresión nueva obtiene la asociación desde el socket real, sin evaluar ni capturar el DOM del anfitrión antes del intento. Playwright puede conceder activación al evaluar JavaScript; se comprueba `navigator.userActivation.hasBeenActive === false` con CDP y `userGesture: false`. El enlace usa el formato `youtu.be/…?si=…` de compartir desde Android.
+- Ahora el primer intento se inicia silenciado si falta permiso de audio. La reproducción solo se confirma con el estado real del reproductor; el mando muestra el inicio pendiente y el volumen real, permite pausa/reanudación, y se habilita audio con un clic en el PC. El intento detenido se libera a los ocho segundos, se reintenta silenciado una sola vez si YouTube rechaza el intento audible, y cancelar/sustituir no permite reactivar el reproductor por una respuesta tardía.
+- TypeScript y compilación aprobados; **47 pruebas unitarias aprobadas en siete archivos**, incluyendo seis casos nuevos de inicio silenciado, activación de audio, bloqueo, plazo máximo, pausa y destrucción. Pruebas de navegador locales aprobadas: primer intento real sin gestos en el anfitrión, reproducción real con activación local, adaptadores de YouTube/Vimeo, enlaces directos y sustitución, vídeo/AVI/reconexión y navegación de web externa.
+- Se confirmó que llamar al scroll de una página externa desde el anfitrión lanza `SecurityError`, incluso con `Access-Control-Allow-Origin: *`. Esa misma página sí se desplaza con interacción desde el PC. El mando no presenta controles remotos que el sitio no permite y explica el requisito de integración en la web destino o extensión en el PC. La pantalla cambia su indicación a **Navegación en el PC**.
+
+Publicación y regresión pública de este ajuste pendientes. No se añade una extensión, proxy ni almacenamiento. La comprobación en el Android físico del usuario continúa pendiente.
+
 ## Idiomas, guía, límite de archivos y enlaces — 13 de octubre de 2026
 
 - Compilación de producción y TypeScript aprobados. Vitest: **41 pruebas aprobadas en seis archivos**. Playwright local: **21 escenarios aprobados en 2,8 minutos**; las dos pruebas de Vimeo y sus adaptadores se repitieron tras el último ajuste del seguimiento de errores.

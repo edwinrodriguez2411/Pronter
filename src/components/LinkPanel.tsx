@@ -46,6 +46,6 @@ export function ExternalActions({ source, host = false }: {
 }) {
     return <div className="external-actions" data-guide="external">
     {host ? <a className="button" href={source.url} target="_blank" rel="noopener noreferrer"><ExternalLink size={18} aria-hidden="true"/>{t("Abrir fuera")}</a> : <span>{t("Para abrir fuera, pulsa \u00ABAbrir fuera\u00BB en el PC. Pronter no controla esa pesta\u00F1a.")}</span>}
-    {source.provider === 'web' && <p>{t("El sitio puede impedir mostrarse dentro de Pronter. No hay control remoto de sus botones ni de su scroll.")}</p>}
+    {source.provider === 'web' && <p>{t("Para mover el scroll o pulsar botones de otra web, esa web debe ofrecer una integración o el PC necesita una extensión. Una SPA no tiene permiso para hacerlo por sí sola.")}</p>}
   </div>;
 }

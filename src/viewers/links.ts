@@ -1,11 +1,13 @@
 import { emptyViewer, type Command, type LinkSource, type ViewerState } from '../../shared/protocol';
 import type { ViewerEngine } from './engine';
+import { YouTubePlayback } from '../lib/youtube-playback';
 
 interface YouTubePlayer {
   playVideo(): void; pauseVideo(): void; destroy(): void; seekTo(value: number, allow: boolean): void;
   getCurrentTime(): number; getDuration(): number; getVolume(): number; getPlayerState(): number;
   setVolume(value: number): void; getPlaybackRate(): number; setPlaybackRate(value: number): void;
   getAvailablePlaybackRates(): number[];
+  mute(): void; unMute(): void; isMuted(): boolean;
 }
 interface YouTubeApi { Player: new (element: HTMLElement, options: object) => YouTubePlayer }
 declare global { interface Window { YT?: YouTubeApi; onYouTubeIframeAPIReady?: () => void } }
@@ -50,7 +52,7 @@ export async function createLinkViewer(source: LinkSource, layer: HTMLElement, s
     timeout.signal.addEventListener('abort', stop, { once: true });
     task.then(value => { cleanup(); resolve(value); }, error => { cleanup(); reject(error); });
   });
-  const unavailable = () => update({ notice: 'Este vídeo no está disponible o no permite incrustarse. Abre el enlace en el PC.', capabilities: [], mediaActions: [], paused: true, needsActivation: false });
+  const unavailable = () => update({ notice: 'Este vídeo no está disponible o no permite incrustarse. Abre el enlace en el PC.', capabilities: [], mediaActions: [], mediaPending: false, paused: true, needsActivation: false });
   let specific: (command: Command) => Promise<void> = async () => {};
   let activate = async () => {};
   const engine: ViewerEngine = {
@@ -75,33 +77,38 @@ export async function createLinkViewer(source: LinkSource, layer: HTMLElement, s
   try {
     if (source.provider === 'web') {
       if (source.url.startsWith('https:')) playerFrame(source.url);
-      state.notice = 'Esta página se controla desde el PC. Si no aparece, pulsa «Abrir fuera». Pronter no controla pestañas externas.';
+      state.notice = 'El navegador impide el control remoto de esta web. Usa el PC para navegar o «Abrir fuera» si no se muestra.';
+      specific = async () => { throw new Error(state.notice); };
       update();
     } else if (source.provider === 'youtube') {
       const api = await bounded(loadYouTube()); signal.throwIfAborted();
       const iframe = playerFrame(`https://www.youtube-nocookie.com/embed/${source.mediaId}?enablejsapi=1&origin=${encodeURIComponent(location.origin)}&playsinline=1&start=${source.start || 0}&hl=${document.documentElement.lang}`);
       let player!: YouTubePlayer;
+      let playback: YouTubePlayback | undefined;
       await bounded(new Promise<void>((resolve, reject) => {
         player = new api.Player(iframe, { events: {
           onReady: () => resolve(),
-          onError: () => { const error = new Error('Este vídeo no está disponible o no permite incrustarse. Abre el enlace en el PC.'); if (state.capabilities.includes('media')) unavailable(); reject(error); },
-          onAutoplayBlocked: () => update({ needsActivation: true, paused: true, notice: 'Toca «Activar audio» en la pantalla del computador y vuelve a reproducir.' }),
+          onError: () => { const error = new Error('Este vídeo no está disponible o no permite incrustarse. Abre el enlace en el PC.'); playback?.destroy(); if (state.capabilities.includes('media')) unavailable(); reject(error); },
+          onAutoplayBlocked: () => playback?.blocked(),
+          onStateChange: () => playback?.sync(),
         } });
         cleanups.push(() => player.destroy());
       }));
       state.capabilities = ['media']; state.mediaActions = ['seek', 'volume', ...(player.getAvailablePlaybackRates().length > 1 ? ['rate' as const] : [])];
+      playback = new YouTubePlayback(player, update, () => Boolean(navigator.userActivation?.hasBeenActive));
+      cleanups.push(() => playback?.destroy());
       const sync = () => {
-        if (!alive) return;
+        if (!alive || !state.capabilities.includes('media')) return;
         const duration = player.getDuration() || 0;
-        update({ duration: Number.isFinite(duration) ? duration : 0, currentTime: player.getCurrentTime() || 0, paused: player.getPlayerState() !== 1, volume: player.getVolume() / 100, rate: player.getPlaybackRate() || 1 });
+        update({ duration: Number.isFinite(duration) ? duration : 0, currentTime: player.getCurrentTime() || 0, rate: player.getPlaybackRate() || 1 }); playback?.sync();
       };
       const poll = setInterval(sync, 500); cleanups.push(() => clearInterval(poll));
-      activate = async () => { player.playVideo(); update({ needsActivation: false, notice: '' }); };
+      activate = async () => { playback?.play(true); };
       specific = async (command) => {
-        if (command.type === 'play') await activate();
-        if (command.type === 'pause') player.pauseVideo();
+        if (command.type === 'play') playback?.play();
+        if (command.type === 'pause') playback?.pause();
         if (command.type === 'seek') player.seekTo(Number(command.value), true);
-        if (command.type === 'volume') player.setVolume(Number(command.value) * 100);
+        if (command.type === 'volume') playback?.setVolume(Number(command.value));
         if (command.type === 'rate') player.setPlaybackRate(Number(command.value));
         sync();
       }; sync();

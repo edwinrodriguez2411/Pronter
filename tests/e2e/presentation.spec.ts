@@ -1,4 +1,4 @@
-import { test, expect, type Page, type WebSocketRoute } from '@playwright/test';
+import { test, expect, chromium, type Page, type WebSocketRoute } from '@playwright/test';
 import { pdfFixture, pptxFixture, svgFixture, wavFixture } from '../fixtures';
 import { readFileSync, existsSync } from 'node:fs';
 import { mkdirSync, openSync, closeSync, ftruncateSync, writeSync } from 'node:fs';
@@ -113,7 +113,7 @@ test('YouTube and Vimeo adapters relay media controls and web links offer an hon
   const host = await browser.newPage(), phone = await browser.newPage();
   const frameHtml = '<!doctype html><p id="state">paused</p><script>addEventListener("message",e=>{if(typeof e.data==="string")document.getElementById("state").textContent=e.data});</script>';
   await host.route('https://www.youtube-nocookie.com/embed/**', route => route.fulfill({ contentType: 'text/html', body: frameHtml }));
-  await host.route('https://www.youtube.com/iframe_api', route => route.fulfill({ contentType: 'application/javascript', body: `window.YT={Player:class {constructor(el,o){this.el=el;this.time=0;this.volume=100;this.rate=1;this.state=2;el.addEventListener('load',()=>o.events.onReady());}playVideo(){this.state=1;this.el.contentWindow.postMessage('playing','*');}pauseVideo(){this.state=2;this.el.contentWindow.postMessage('paused','*');}getCurrentTime(){return this.time;}getDuration(){return 60;}getVolume(){return this.volume;}getPlaybackRate(){return this.rate;}getAvailablePlaybackRates(){return [0.5,1,1.5,2];}getPlayerState(){return this.state;}setVolume(v){this.volume=v;}seekTo(t){this.time=t;}setPlaybackRate(r){this.rate=r;}destroy(){this.el.remove();}}};window.onYouTubeIframeAPIReady();` }));
+  await host.route('https://www.youtube.com/iframe_api', route => route.fulfill({ contentType: 'application/javascript', body: `window.YT={Player:class {constructor(el,o){this.el=el;this.time=0;this.volume=100;this.rate=1;this.state=2;el.addEventListener('load',()=>o.events.onReady());}playVideo(){this.state=1;this.el.contentWindow.postMessage('playing','*');}pauseVideo(){this.state=2;this.el.contentWindow.postMessage('paused','*');}getCurrentTime(){return this.time;}getDuration(){return 60;}isMuted(){return !!this.muted;}mute(){this.muted=true;}unMute(){this.muted=false;}getVolume(){return this.volume;}getPlaybackRate(){return this.rate;}getAvailablePlaybackRates(){return [0.5,1,1.5,2];}getPlayerState(){return this.state;}setVolume(v){this.volume=v;}seekTo(t){this.time=t;}setPlaybackRate(r){this.rate=r;}destroy(){this.el.remove();}}};window.onYouTubeIframeAPIReady();` }));
   await host.route('https://player.vimeo.com/video/**', route => route.fulfill({ contentType: 'text/html', body: `<!doctype html><p id="state">paused</p><script>let s={getDuration:60,getCurrentTime:0,getPaused:true,getVolume:1,getPlaybackRate:1};addEventListener('message',e=>{let d=typeof e.data==='string'?JSON.parse(e.data):e.data;if(!d.method)return;if(d.method==='play'){s.getPaused=false;document.getElementById('state').textContent='playing';}if(d.method==='pause'){s.getPaused=true;document.getElementById('state').textContent='paused';}if(d.method==='setCurrentTime')s.getCurrentTime=d.value;if(d.method==='setVolume')s.getVolume=d.value;if(d.method==='setPlaybackRate')s.getPlaybackRate=d.value;e.source.postMessage({method:d.method,value:s[d.method]??d.value??true},e.origin)});parent.postMessage({event:'ready'},'*');</script>` }));
   await host.context().route('https://blocked.example/**', route => route.fulfill({ contentType: 'text/html', headers: { 'X-Frame-Options': 'DENY' }, body: '<h1>Blocked embed</h1>' }));
   await associate(host, phone);
@@ -170,6 +170,28 @@ test('direct media links can be controlled and cancelling a stalled link preserv
   await phone.getByRole('button', { name: 'Salir', exact: true }).click(); await host.close(); await phone.close();
 });
 
+test('a normal cross-origin website cannot be scrolled remotely even when it permits CORS', async ({ browser }) => {
+  const host = await browser.newPage(), phone = await browser.newPage();
+  await host.route('https://website.example/**', route => route.fulfill({ contentType: 'text/html', headers: { 'Access-Control-Allow-Origin': '*' }, body: '<!doctype html><meta charset="utf-8"><button onclick="window.scrollBy(0,400)">Desplazar aquí</button><div style="height:4000px">Página externa</div>' }));
+  await associate(host, phone);
+  await phone.getByLabel('Enlace para mostrar').fill('https://website.example/article'); await phone.getByRole('button', { name: 'Mostrar enlace', exact: true }).click();
+  await expect(phone.locator('.current-file strong')).toHaveText('website.example');
+  await expect(host.getByText('Navegación en el PC', { exact: true })).toBeVisible();
+  await expect(host.frameLocator('.content-link iframe').getByText('Página externa', { exact: true })).toBeVisible();
+  const blocked = await host.evaluate(() => {
+    try { document.querySelector<HTMLIFrameElement>('.content-link iframe')!.contentWindow!.scrollBy(0,400); return ''; }
+    catch (error) { return (error as DOMException).name; }
+  });
+  expect(blocked).toBe('SecurityError');
+  await expect(phone.locator('.scroll-controls')).toHaveCount(0);
+  await expect(phone.locator('.external-actions')).toContainText('el PC necesita una extensión');
+  await host.frameLocator('.content-link iframe').getByRole('button', { name: 'Desplazar aquí' }).click();
+  await expect.poll(() => host.frameLocator('.content-link iframe').locator('body').evaluate(() => scrollY)).toBe(400);
+  await phone.locator('.controller-header select').selectOption('en');
+  await expect(phone.locator('.external-actions')).toContainText('the computer needs an extension');
+  await phone.getByRole('button', { name: 'Exit', exact: true }).click(); await host.close(); await phone.close();
+});
+
 test('real YouTube embed loads and accepts remote playback controls', async ({ browser }) => {
   test.setTimeout(90000);
   const host = await browser.newPage(), phone = await browser.newPage(); await associate(host, phone);
@@ -182,6 +204,43 @@ test('real YouTube embed loads and accepts remote playback controls', async ({ b
   await expect(phone.getByRole('button', { name: 'Reproducir', exact: true })).toBeVisible();
   await expect(host.locator('.content-link iframe')).toHaveCount(1);
   await phone.getByRole('button', { name: 'Salir', exact: true }).click(); await host.close(); await phone.close();
+});
+
+test('first YouTube playback starts from the phone before any host interaction', async ({ baseURL }) => {
+  test.setTimeout(90000);
+  const browser = await chromium.launch({ args: ['--autoplay-policy=document-user-activation-required', '--disable-features=PreloadMediaEngagementData,MediaEngagementBypassAutoplay'] });
+  try {
+    const host = await browser.newPage({ baseURL, locale: 'es-CO' }), phone = await browser.newPage({ baseURL, locale: 'es-CO', viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+    // Playwright's DOM evaluations can grant user activation. Read the pairing
+    // token from the real socket instead of touching the host DOM in this case.
+    const paired = new Promise<string>((resolve) => host.on('websocket', socket => socket.on('framereceived', ({ payload }) => {
+      if (typeof payload !== 'string' || !payload.startsWith('43/control,')) return;
+      const token = JSON.parse(payload.slice(payload.indexOf('[')))[0]?.data?.token;
+      if (token) resolve(token);
+    })));
+    await host.goto('/'); await phone.goto(`/control#${await paired}`);
+    await expect(phone.getByText('Celular conectado', { exact: true })).toBeVisible();
+    const cdp = await host.context().newCDPSession(host);
+    const activation = await cdp.send('Runtime.evaluate', { expression: 'navigator.userActivation.hasBeenActive', userGesture: false, returnByValue: true });
+    expect(activation.result.value).toBe(false);
+    await phone.getByLabel('Enlace para mostrar').fill('https://youtu.be/M7lc1UVf-VE?si=android-share');
+    await phone.getByRole('button', { name: 'Mostrar enlace', exact: true }).click();
+    await expect(phone.locator('.current-file strong')).toContainText('YouTube', { timeout: 20000 });
+    await phone.getByRole('button', { name: 'Reproducir', exact: true }).click();
+    await expect(phone.getByRole('button', { name: 'Pausar', exact: true })).toBeVisible();
+    await expect(phone.getByRole('slider', { name: 'Volumen', exact: true })).toHaveValue('0');
+    await expect(phone.getByRole('status').filter({ hasText: 'Se inicia sin sonido' })).toBeVisible();
+    await phone.getByRole('button', { name: 'Pausar', exact: true }).click();
+    await expect(phone.getByRole('button', { name: 'Reproducir', exact: true })).toBeVisible();
+    await phone.getByRole('button', { name: 'Reproducir', exact: true }).click();
+    await expect(phone.getByRole('button', { name: 'Pausar', exact: true })).toBeVisible();
+    await host.getByRole('button', { name: 'Activar audio', exact: true }).click();
+    await expect(phone.getByRole('slider', { name: 'Volumen', exact: true })).toHaveValue('1');
+    await expect(phone.locator('.activation-hint')).toHaveCount(0);
+    await upload(phone, 'despues-de-youtube.svg', 'image/svg+xml', svgFixture());
+    await expect(host.locator('.content-link iframe')).toHaveCount(0);
+    await phone.getByRole('button', { name: 'Salir', exact: true }).click();
+  } finally { await browser.close(); }
 });
 
 test('real Vimeo response either permits playback or reports provider refusal and allows recovery', async ({ browser }, testInfo) => {

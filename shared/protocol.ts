@@ -54,6 +54,7 @@ export interface ViewerState {
   link?: LinkSource;
   failedLink?: LinkSource;
   mediaActions?: ('seek' | 'volume' | 'rate')[];
+  mediaPending?: boolean;
   pendingId?: string;
   pendingName?: string;
 }
@@ -61,7 +62,7 @@ export const emptyViewer = (): ViewerState => ({
   assetId: null, name: '', kind: null, capabilities: [], page: 1, pages: 1,
   zoom: 1, paused: true, currentTime: 0, duration: 0, volume: 1, rate: 1,
   black: false, staticMode: false, animationStep: 0, animationSteps: 0,
-  needsActivation: false, progress: 0, phase: 'idle', notice: '', noticeMessage: undefined, inkCount: 0, link: undefined, failedLink: undefined, mediaActions: undefined, pendingId: undefined, pendingName: undefined,
+  needsActivation: false, progress: 0, phase: 'idle', notice: '', noticeMessage: undefined, inkCount: 0, link: undefined, failedLink: undefined, mediaActions: undefined, mediaPending: undefined, pendingId: undefined, pendingName: undefined,
 });
 export const COMMANDS = ['next', 'previous', 'page', 'zoom', 'fit', 'pan', 'scroll', 'play', 'pause', 'volume', 'seek', 'rate', 'black', 'static'] as const;
 export type CommandType = typeof COMMANDS[number];
@@ -116,6 +117,7 @@ export const viewerSchema = z.object({
   link: z.object({ id, url: z.string().max(2048), provider: z.enum(['youtube', 'vimeo', 'video', 'audio', 'web']), mediaId: z.string().max(100).optional(), hash: z.string().max(100).optional(), start: z.number().finite().min(0).max(864000).optional() }).strict().optional(),
   failedLink: z.object({ id, url: z.string().max(2048), provider: z.enum(['youtube', 'vimeo', 'video', 'audio', 'web']), mediaId: z.string().max(100).optional(), hash: z.string().max(100).optional(), start: z.number().finite().min(0).max(864000).optional() }).strict().optional(),
   mediaActions: z.array(z.enum(['seek', 'volume', 'rate'])).max(3).optional(),
+  mediaPending: z.boolean().optional(),
   pendingId: id.optional(), pendingName: z.string().max(255).optional(),
 }).strict();
 
